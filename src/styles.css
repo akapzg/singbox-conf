@@ -674,3 +674,57 @@ button.danger-fill {
   border-color: var(--danger);
   color: #fff;
 }
+
+/* ---------- proxy groups ---------- */
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  align-self: flex-start;
+}
+.seg {
+  border: 0;
+  background: none;
+  padding: 5px 12px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.seg.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow), 0 0 0 1px var(--border);
+  font-weight: 500;
+}
+.member-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.member-tools {
+  flex-wrap: nowrap;
+}
+.member-tools input {
+  flex: 1;
+  font-family: inherit;
+}
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.member-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Platform, Profile, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
+import type { Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
-import { freshTag, newNode, newTailnet } from "./defaults";
+import { freshTag, newGroup, newNode, newTailnet } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
@@ -264,6 +264,180 @@ const ruleSummary = (text: string) => {
   return { count: domains.length + cidrs.length, invalid };
 };
 
+interface Candidate {
+  id: string;
+  tag: string;
+  kind: "节点" | "tailnet" | "代理组";
+  detail: string;
+}
+
+/** Pick group members from a long list: search, select all matches, or tick one by one. */
+function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onChange: (ids: string[]) => void }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const matches = props.candidates.filter((c) => !q || `${c.tag} ${c.detail}`.toLowerCase().includes(q));
+  const selected = new Set(props.selected);
+  // Keep members in the order of the candidate list (node order, then tailnets, then groups).
+  const commit = (next: Set<string>) => props.onChange(props.candidates.filter((c) => next.has(c.id)).map((c) => c.id));
+  const allMatched = matches.length > 0 && matches.every((c) => selected.has(c.id));
+  return (
+    <div className="member-picker">
+      <div className="row member-tools">
+        <input
+          type="search"
+          value={query}
+          placeholder="按名称、协议或服务器筛选，例如 us、hysteria2"
+          aria-label="筛选成员"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button
+          type="button"
+          className="ghost small"
+          disabled={!matches.length}
+          onClick={() => {
+            const next = new Set(selected);
+            matches.forEach((c) => (allMatched ? next.delete(c.id) : next.add(c.id)));
+            commit(next);
+          }}
+        >
+          {allMatched ? `取消选择这 ${matches.length} 项` : `选中${q ? "匹配的" : "全部"} ${matches.length} 项`}
+        </button>
+      </div>
+      <ul className="member-list">
+        {matches.map((c) => (
+          <li key={c.id}>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={selected.has(c.id)}
+                onChange={(e) => {
+                  const next = new Set(selected);
+                  if (e.target.checked) next.add(c.id);
+                  else next.delete(c.id);
+                  commit(next);
+                }}
+              />
+              <span className="member-label">
+                <span className="mono">{c.tag}</span>
+                <span className="muted"> · {c.kind}{c.detail && ` · ${c.detail}`}</span>
+              </span>
+            </label>
+          </li>
+        ))}
+        {!matches.length && <li className="muted">没有匹配的项</li>}
+      </ul>
+      <p className="muted">已选 {props.selected.length} 项</p>
+    </div>
+  );
+}
+
+function GroupCard(props: {
+  group: ProxyGroup;
+  candidates: Candidate[];
+  issues: Issue[];
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: (g: ProxyGroup) => void;
+  onRemove: () => void;
+}) {
+  const { group: g, candidates } = props;
+  const set = (patch: Partial<ProxyGroup>) => props.onChange({ ...g, ...patch });
+  const memberTags = g.members.map((id) => candidates.find((c) => c.id === id)?.tag).filter(Boolean) as string[];
+  return (
+    <article className={`card node${props.expanded ? " open" : ""}`} id={`item-${g.id}`}>
+      <div className="card-summary">
+        <button type="button" className="summary-toggle" aria-expanded={props.expanded} onClick={props.onToggle}>
+          <span className="chevron" aria-hidden="true" />
+          <span className="summary-main">
+            <span className="summary-title">{g.tag || "未命名代理组"}</span>
+            <span className="summary-meta">
+              {g.type === "urltest" ? "自动测速" : "手动选择"} · {memberTags.length} 个成员
+              {memberTags.length > 0 && <span className="mono">：{memberTags.slice(0, 4).join("、")}{memberTags.length > 4 ? "…" : ""}</span>}
+            </span>
+          </span>
+          <span className="summary-badges">
+            <IssueBadge issues={props.issues} />
+          </span>
+        </button>
+        <div className="card-actions">
+          <button type="button" className="icon danger" aria-label={`删除代理组 ${g.tag}`} title="删除" onClick={props.onRemove}>
+            ✕
+          </button>
+        </div>
+      </div>
+      {props.expanded && (
+        <div className="card-body">
+          <IssueList issues={props.issues} />
+          <div className="grid">
+            <Field label="名称" hint="在客户端的节点列表里显示的组名">
+              <input value={g.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
+            </Field>
+            <div className="field">
+              <span className="field-label">类型</span>
+              <div className="segmented" role="radiogroup" aria-label="代理组类型">
+                {(
+                  [
+                    ["selector", "手动选择"],
+                    ["urltest", "自动测速"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={g.type === value}
+                    className={g.type === value ? "seg active" : "seg"}
+                    onClick={() => set({ type: value })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className="field-hint">{g.type === "urltest" ? "定时测速，自动使用延迟最低的成员" : "在客户端里手动选用哪个成员"}</span>
+            </div>
+          </div>
+          <div className="field">
+            <span className="field-label">成员</span>
+            <MemberPicker candidates={candidates.filter((c) => c.id !== g.id)} selected={g.members} onChange={(members) => set({ members })} />
+          </div>
+          {g.type === "selector" ? (
+            <Field label="默认选中" hint="客户端第一次启动时选中的成员">
+              <select value={g.defaultMember} onChange={(e) => set({ defaultMember: e.target.value })}>
+                <option value="">第一个成员</option>
+                {g.members.map((id) => {
+                  const c = candidates.find((x) => x.id === id);
+                  return c ? (
+                    <option key={id} value={id}>
+                      {c.tag}
+                    </option>
+                  ) : null;
+                })}
+              </select>
+            </Field>
+          ) : (
+            <div className="grid">
+              <Field label="测速间隔" hint="留空为 3m">
+                <input value={g.interval} placeholder="3m" spellCheck={false} onChange={(e) => set({ interval: e.target.value.trim() })} />
+              </Field>
+              <Field label="容差（毫秒）" hint="延迟差在此范围内不切换，留空为 50">
+                <input
+                  value={g.tolerance ?? ""}
+                  placeholder="50"
+                  inputMode="numeric"
+                  onChange={(e) => set({ tolerance: e.target.value.trim() === "" ? null : Number(e.target.value) })}
+                />
+              </Field>
+              <Field label="测速地址" hint="留空为 https://www.gstatic.com/generate_204" wide>
+                <input value={g.testUrl} placeholder="https://www.gstatic.com/generate_204" spellCheck={false} onChange={(e) => set({ testUrl: e.target.value.trim() })} />
+              </Field>
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
 function RoutingCard(props: { settings: Settings; onChange: (patch: Partial<Settings>) => void }) {
   const { settings: s } = props;
   return (
@@ -489,6 +663,19 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
   );
 }
 
+/** The profile with `id` removed from every group's members. */
+function dropMember(p: Profile, id: string | undefined): Profile {
+  if (!id) return p;
+  return {
+    ...p,
+    groups: p.groups.map((g) => ({
+      ...g,
+      members: g.members.filter((m) => m !== id),
+      defaultMember: g.defaultMember === id ? "" : g.defaultMember,
+    })),
+  };
+}
+
 /** A node whose server is still the template's example address. */
 function isExampleNode(n: ProxyNode): boolean {
   const { object } = nodeObject(n);
@@ -545,9 +732,10 @@ function MenuItem(props: { onSelect: () => void; danger?: boolean; disabled?: bo
   );
 }
 
-type Tab = "nodes" | "routing" | "tailscale" | "settings";
+type Tab = "nodes" | "groups" | "routing" | "tailscale" | "settings";
 const TABS: { id: Tab; label: string }[] = [
   { id: "nodes", label: "节点" },
+  { id: "groups", label: "代理组" },
   { id: "routing", label: "分流" },
   { id: "tailscale", label: "Tailscale" },
   { id: "settings", label: "高级" },
@@ -661,13 +849,45 @@ export default function App() {
   const removeNode = async (i: number) => {
     const tag = profile.nodes[i]?.tag || "未命名";
     if (!(await dialogs.confirm(`删除节点「${tag}」？`, { confirmLabel: "删除", danger: true }))) return;
-    setProfile((p) => ({ ...p, nodes: p.nodes.filter((_, j) => j !== i) }));
+    const id = profile.nodes[i]?.id;
+    setProfile((p) => ({ ...dropMember(p, id), nodes: p.nodes.filter((_, j) => j !== i) }));
   };
   const removeTailnet = async (i: number) => {
     const tag = profile.settings.tailnets[i]?.tag || "未命名";
     if (!(await dialogs.confirm(`删除 tailnet「${tag}」？`, { confirmLabel: "删除", danger: true }))) return;
-    setProfile((p) => ({ ...p, settings: { ...p.settings, tailnets: p.settings.tailnets.filter((_, j) => j !== i) } }));
+    const id = profile.settings.tailnets[i]?.id;
+    setProfile((p) => {
+      const q = dropMember(p, id);
+      return { ...q, settings: { ...q.settings, tailnets: q.settings.tailnets.filter((_, j) => j !== i) } };
+    });
   };
+  const addGroup = () => {
+    const g = newGroup({ tag: freshTag("group", [...profile.groups.map((x) => x.tag), ...profile.nodes.map((n) => n.tag)]) });
+    setProfile((p) => ({ ...p, groups: [...p.groups, g] }));
+    setExpanded((prev) => new Set(prev).add(g.id));
+    setScrollTo(g.id);
+  };
+  const removeGroup = async (i: number) => {
+    const g = profile.groups[i];
+    if (!(await dialogs.confirm(`删除代理组「${g.tag || "未命名"}」？`, { message: "组里的节点不会被删除。", confirmLabel: "删除", danger: true }))) return;
+    setProfile((p) => {
+      const q = dropMember(p, g.id);
+      return {
+        ...q,
+        groups: q.groups.filter((x) => x.id !== g.id),
+        settings: { ...q.settings, proxyDefault: q.settings.proxyDefault === g.id ? "auto" : q.settings.proxyDefault },
+      };
+    });
+  };
+  const candidates: Candidate[] = [
+    ...profile.nodes.map((n) => {
+      const { object } = nodeObject(n);
+      const server = object && typeof object.server === "string" ? object.server : "";
+      return { id: n.id, tag: n.tag, kind: "节点" as const, detail: [object ? String(object.type) : "", server].filter(Boolean).join(" · ") };
+    }),
+    ...profile.settings.tailnets.map((t) => ({ id: t.id, tag: t.tag, kind: "tailnet" as const, detail: "" })),
+    ...profile.groups.map((g) => ({ id: g.id, tag: g.tag, kind: "代理组" as const, detail: g.type === "urltest" ? "自动测速" : "手动选择" })),
+  ];
   const moveNode = (i: number, delta: number) =>
     setProfile((p) => {
       const nodes = [...p.nodes];
@@ -705,9 +925,16 @@ export default function App() {
     const keep = profile.nodes.every(isExampleNode) ? [] : profile.nodes;
     const nodes = dedupeTags(result.nodes, [...keep.map((n) => n.tag), ...profile.settings.tailnets.map((t) => t.tag)]);
     const tailnets = dedupeTags(result.tailnets, [...profile.settings.tailnets.map((t) => t.tag), ...nodes.map((n) => n.tag)]);
+    const groups = dedupeTags(result.groups, [
+      ...profile.groups.map((g) => g.tag),
+      ...nodes.map((n) => n.tag),
+      ...tailnets.map((t) => t.tag),
+      ...keep.map((n) => n.tag),
+    ]);
     const summary = [
       `· ${nodes.length} 个节点${nodes.length ? `（${nodes.map((n) => n.tag).join("、")}）` : ""}`,
       `· ${tailnets.length} 个 tailnet${tailnets.length ? `（${tailnets.map((t) => t.tag).join("、")}）` : ""}`,
+      ...(groups.length ? [`· ${groups.length} 个代理组（${groups.map((g) => g.tag).join("、")}）`] : []),
       ...result.notes.map((n) => `· ${n}`),
       ...(keep.length < profile.nodes.length ? ["· 现有的示例节点会被替换"] : []),
       "",
@@ -717,10 +944,11 @@ export default function App() {
     setProfile((p) => ({
       ...p,
       nodes: [...keep, ...nodes],
+      groups: [...p.groups, ...groups],
       settings: { ...p.settings, tailnets: [...p.settings.tailnets, ...tailnets] },
     }));
     setTab(nodes.length ? "nodes" : "tailscale");
-    setToast(`已导入 ${nodes.length} 个节点、${tailnets.length} 个 tailnet`);
+    setToast(`已导入 ${nodes.length} 个节点、${tailnets.length} 个 tailnet${groups.length ? `、${groups.length} 个代理组` : ""}`);
   };
 
   const tailnets = profile.settings.tailnets;
@@ -838,7 +1066,8 @@ export default function App() {
         <section className="pane">
           <nav className="tabs" role="tablist" aria-label="设置分类">
             {TABS.map((t) => {
-              const count = t.id === "nodes" ? profile.nodes.length : t.id === "tailscale" ? tailnets.length : null;
+              const count =
+                t.id === "nodes" ? profile.nodes.length : t.id === "groups" ? profile.groups.length : t.id === "tailscale" ? tailnets.length : null;
               const state = tabState(t.id);
               return (
                 <button
@@ -884,6 +1113,56 @@ export default function App() {
                   onChange={(next) => updateNode(i, next)}
                   onRemove={() => removeNode(i)}
                   onMove={(d) => moveNode(i, d)}
+                />
+              ))}
+            </>
+          )}
+
+          {tab === "groups" && (
+            <>
+              <div className="pane-head">
+                <p className="muted">
+                  所有走代理的流量都经过 <span className="mono">proxy</span>：可以选 <span className="mono">auto</span>（全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
+                </p>
+                <button type="button" className="primary" onClick={addGroup}>
+                  添加代理组
+                </button>
+              </div>
+              <article className="card">
+                <div className="grid">
+                  <Field label="proxy 默认选择" hint="客户端第一次启动时使用">
+                    <select value={profile.settings.proxyDefault} onChange={(e) => setSettings({ proxyDefault: e.target.value })}>
+                      <option value="auto">auto（全部节点自动测速）</option>
+                      {profile.groups.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.tag}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <label className="check wide">
+                    <input
+                      type="checkbox"
+                      checked={profile.settings.listNodesInProxy}
+                      onChange={(e) => setSettings({ listNodesInProxy: e.target.checked })}
+                    />
+                    <span>
+                      在 proxy 里逐个列出节点<span className="muted">（节点多时可以关掉，客户端里只显示 auto 和各代理组）</span>
+                    </span>
+                  </label>
+                </div>
+              </article>
+              {profile.groups.length === 0 && <p className="empty">还没有代理组。节点不多时不需要，直接用 auto 或手动选节点即可。</p>}
+              {profile.groups.map((g, i) => (
+                <GroupCard
+                  key={g.id}
+                  group={g}
+                  candidates={candidates}
+                  issues={issuesFor(g.id)}
+                  expanded={expanded.has(g.id)}
+                  onToggle={() => toggle(g.id)}
+                  onChange={(next) => setProfile((p) => ({ ...p, groups: p.groups.map((x) => (x.id === g.id ? next : x)) }))}
+                  onRemove={() => removeGroup(i)}
                 />
               ))}
             </>

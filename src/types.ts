@@ -50,14 +50,34 @@ export interface Settings {
   /** Lines as entered: domains or IP prefixes that always go through the proxy. */
   proxyRules: string[];
   tailnets: Tailnet[];
+  /** What `proxy` picks by default: "auto" or a group id. */
+  proxyDefault: string;
+  /** List nodes one by one in `proxy`, next to `auto` and the groups. */
+  listNodesInProxy: boolean;
   /** Resolve `lancache.steamcontent.com` locally and keep Steam downloads direct in Non-CN mode. */
   steam: boolean;
   /** Reject QUIC to gateway.icloud.com so iCloud falls back to TCP through the rules. */
   blockIcloudQuic: boolean;
 }
 
+export interface ProxyGroup {
+  id: string;
+  tag: string;
+  /** selector: picked by hand in the client; urltest: the fastest member is used. */
+  type: "selector" | "urltest";
+  /** Ids of member nodes, tailnets or other groups, in order. */
+  members: string[];
+  /** selector: id of the member picked by default; empty means the first. */
+  defaultMember: string;
+  /** urltest overrides; empty means sing-box's default. */
+  testUrl: string;
+  interval: string;
+  tolerance: number | null;
+}
+
 export interface Profile {
   version: 2;
   nodes: ProxyNode[];
+  groups: ProxyGroup[];
   settings: Settings;
 }

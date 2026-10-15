@@ -1,4 +1,4 @@
-import type { Profile, ProxyNode, Settings, Tailnet } from "./types";
+import type { Profile, ProxyGroup, ProxyNode, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -33,6 +33,8 @@ export const defaultSettings = (): Settings => ({
   directDomains: [],
   proxyRules: [],
   tailnets: [],
+  proxyDefault: "auto",
+  listNodesInProxy: true,
   steam: false,
   blockIcloudQuic: false,
 });
@@ -62,12 +64,17 @@ export function newTailnet(partial: Partial<Tailnet> = {}): Tailnet {
   };
 }
 
+export function newGroup(partial: Partial<ProxyGroup> = {}): ProxyGroup {
+  return { id: uid(), tag: "group", type: "selector", members: [], defaultMember: "", testUrl: "", interval: "", tolerance: null, ...partial };
+}
+
 /** Example profile for first-time visitors: two template nodes, no personal settings. */
 export function blueprintProfile(): Profile {
   const reality = TEMPLATES.find((t) => t.id === "vless-reality")!;
   return {
     version: 2,
     nodes: [newNode({ tag: "hy2-1" }), newNode({ tag: "reality-1", body: reality.body })],
+    groups: [],
     settings: defaultSettings(),
   };
 }

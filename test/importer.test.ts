@@ -35,11 +35,19 @@ describe("importing an existing sing-box config", () => {
     expect(JSON.parse(work.endpoint).type).toBeUndefined();
   });
 
-  it.each(["full-apple", "combo-ss-shadowtls"])("round-trips nodes and Tailscale through a generated config (%s)", (name) => {
+  it.each(["full-apple", "combo-ss-shadowtls"])("round-trips nodes, groups and Tailscale through a generated config (%s)", (name) => {
     const profile = sample(name);
     const config = generateConfig(profile) as any;
     const imported = importSingBoxConfig(JSON.stringify(config));
-    const rebuilt = generateConfig({ ...profile, nodes: imported.nodes, settings: { ...profile.settings, tailnets: imported.tailnets } }) as any;
+    // proxy's default and node listing are settings of ours, not imported: map them across by tag.
+    const defaultTag = profile.groups.find((g) => g.id === profile.settings.proxyDefault)?.tag;
+    const proxyDefault = imported.groups.find((g) => g.tag === defaultTag)?.id ?? "auto";
+    const rebuilt = generateConfig({
+      ...profile,
+      nodes: imported.nodes,
+      groups: imported.groups,
+      settings: { ...profile.settings, tailnets: imported.tailnets, proxyDefault },
+    }) as any;
     expect(normalize(rebuilt.outbounds)).toEqual(normalize(config.outbounds));
     expect(normalize(rebuilt.endpoints)).toEqual(normalize(config.endpoints));
     expect(normalize(rebuilt.dns)).toEqual(normalize(config.dns));
@@ -60,6 +68,40 @@ describe("importing an existing sing-box config", () => {
   it("accepts comments in the file", () => {
     const r = importSingBoxConfig('{ // exported\n "outbounds": [{"type":"socks","tag":"s","server":"127.0.0.1","server_port":1080}] }');
     expect(r.nodes[0].tag).toBe("s");
+  });
+});
+
+describe("importing proxy groups", () => {
+  const config = {
+    outbounds: [
+      { type: "selector", tag: "proxy", outbounds: ["auto", "hk", "a"] },
+      { type: "urltest", tag: "auto", outbounds: ["a", "b"] },
+      { type: "selector", tag: "hk", outbounds: ["a", "b", "direct"], default: "b" },
+      { type: "urltest", tag: "fast", outbounds: ["hk", "c"], interval: "3m", tolerance: 80 },
+      { type: "urltest", tag: "empty", outbounds: ["direct"] },
+      { type: "trojan", tag: "a", server: "a.example.org", server_port: 443, password: "p" },
+      { type: "trojan", tag: "b", server: "b.example.org", server_port: 443, password: "p" },
+      { type: "trojan", tag: "c", server: "c.example.org", server_port: 443, password: "p" },
+      { type: "direct", tag: "direct" },
+    ],
+  };
+  const r = importSingBoxConfig(JSON.stringify(config));
+  const id = (tag: string) => [...r.nodes, ...r.groups].find((x) => x.tag === tag)!.id;
+
+  it("imports user groups with members by id, skipping proxy and auto", () => {
+    expect(r.groups.map((g) => g.tag)).toEqual(["hk", "fast"]);
+    expect(r.groups[0]).toMatchObject({ type: "selector", members: [id("a"), id("b")], defaultMember: id("b") });
+    expect(r.groups[1]).toMatchObject({ type: "urltest", members: [id("hk"), id("c")], interval: "", tolerance: 80 });
+  });
+
+  it("takes direct offering from proxy/auto, and explains what was dropped", () => {
+    expect(r.nodes.map((n) => [n.tag, n.inGroups])).toEqual([
+      ["a", true],
+      ["b", true],
+      ["c", false],
+    ]);
+    expect(r.notes.join()).toContain("「empty」没有可导入的成员");
+    expect(r.notes.join()).toContain("direct");
   });
 });
 

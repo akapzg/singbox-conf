@@ -3,15 +3,16 @@
 // generator's own policy replaces it.
 
 import { parseJsonc } from "./generate";
-import { newNode, newTailnet } from "./defaults";
+import { newGroup, newNode, newTailnet } from "./defaults";
 import { ENDPOINT_TYPES, NODE_TYPES } from "./templates";
-import type { ProxyNode, Tailnet } from "./types";
+import type { ProxyGroup, ProxyNode, Tailnet } from "./types";
 
 type Json = Record<string, any>;
 
 export interface ImportResult {
   nodes: ProxyNode[];
   tailnets: Tailnet[];
+  groups: ProxyGroup[];
   /** Things the user should know were left out or changed. */
   notes: string[];
 }
@@ -22,6 +23,8 @@ const list = (v: unknown): any[] => (v === undefined || v === null ? [] : Array.
 const pretty = (o: Json) => JSON.stringify(o, null, 2);
 
 const GROUP_TYPES = ["selector", "urltest"];
+/** Group tags the generator creates itself; not imported as user groups. */
+const RESERVED_GROUPS = ["proxy", "auto"];
 
 /** Fields the generator fills in or that only make sense in the source config. */
 function nodeBody(o: Json, keptResolvers: Set<string>): Json {
@@ -52,7 +55,9 @@ export function importSingBoxConfig(text: string): ImportResult {
   const dnsRules: Json[] = list(config.dns?.rules);
   const routeRules: Json[] = list(config.route?.rules);
   const groups = outbounds.filter((o) => GROUP_TYPES.includes(o.type));
-  const grouped = new Set(groups.flatMap((g) => list(g.outbounds)));
+  // The generator's own entry groups; when present they say which nodes are offered directly.
+  const entry = groups.filter((g) => RESERVED_GROUPS.includes(g.tag));
+  const grouped = new Set((entry.length ? entry : groups).flatMap((g) => list(g.outbounds)));
 
   // ---- Tailscale ----
   const tailnets: Tailnet[] = endpoints
@@ -106,7 +111,34 @@ export function importSingBoxConfig(text: string): ImportResult {
     .map((o) => `${o.tag}（${o.type}）`);
   if (skipped.length) notes.push(`不支持作为节点、已跳过：${skipped.join("、")}`);
   if (!nodes.length && !tailnets.length) throw new Error("配置里没有可导入的节点或 Tailscale 端点");
-  return { nodes, tailnets, notes };
+
+  // ---- groups ----
+  const userGroups = groups.filter((g) => !RESERVED_GROUPS.includes(g.tag));
+  const imported = userGroups.map((g) => newGroup({ tag: g.tag, type: g.type }));
+  const idOf = new Map<string, string>([
+    ...nodes.map((n) => [n.tag, n.id] as const),
+    ...tailnets.map((t) => [t.tag, t.id] as const),
+    ...imported.map((g) => [g.tag, g.id] as const),
+  ]);
+  const droppedMembers = new Set<string>();
+  const kept: ProxyGroup[] = [];
+  userGroups.forEach((src, i) => {
+    const g = imported[i];
+    for (const tag of list(src.outbounds)) {
+      if (idOf.has(tag)) g.members.push(idOf.get(tag)!);
+      else droppedMembers.add(tag);
+    }
+    if (src.type === "selector" && typeof src.default === "string" && idOf.has(src.default)) g.defaultMember = idOf.get(src.default)!;
+    if (src.type === "urltest") {
+      g.testUrl = src.url && src.url !== "https://www.gstatic.com/generate_204" ? src.url : "";
+      g.interval = typeof src.interval === "string" && src.interval !== "3m" ? src.interval : "";
+      g.tolerance = typeof src.tolerance === "number" && src.tolerance !== 50 ? src.tolerance : null;
+    }
+    if (g.members.length) kept.push(g);
+    else notes.push(`代理组「${g.tag}」没有可导入的成员，已跳过`);
+  });
+  if (droppedMembers.size) notes.push(`代理组里引用的 ${[...droppedMembers].join("、")} 不是可导入的节点，已从组中去掉`);
+  return { nodes, tailnets, groups: kept, notes };
 }
 
 /** Rename imported tags that collide with existing ones (`a` → `a-2`). */

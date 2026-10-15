@@ -97,12 +97,21 @@
 - 纯前端，运行时不发出任何网络请求；设置只保存在本地浏览器，可以保存多套命名配置（例如 Mac、iPhone 各一套）。
 - 构建产物带 CSP（`vite.config.ts`）：只允许同源的脚本和样式，`connect-src 'none'` 禁止一切 fetch/XHR/WebSocket，`form-action 'none'`、`base-uri 'none'`。“不上传数据”由浏览器强制执行，而不只是承诺；即使将来引入的依赖想联网也会被拦下。开发服务器不加（热更新需要 WebSocket）。已在 `vite preview` 下验证：页面功能正常，主动发起的 fetch（包括同源）被拦截。
 
-## 6. 已知局限
+## 6. 代理组
+
+- 所有走代理的流量、远程 DNS、规则集下载只有一个入口：`proxy` 选择器。代理组只决定 `proxy` 最终用哪个节点，DNS 和分流规则完全不受影响，原有设计的正确性不变。
+- `proxy` 的选项依次是：`auto`（所有“加入代理组”的节点，自动测速）、用户的代理组、（可选）逐个节点、作为代理出口的 tailnet。默认选择可以是 `auto` 或任一代理组；节点多时可以不在 `proxy` 里逐个列出节点。
+- 用户代理组是 sing-box 的 `selector`（手动选择）或 `urltest`（自动测速），成员可以是节点、tailnet 或其他代理组。成员按 id 记录，节点改名不会失效；删除节点时会从各组中移除。
+- 校验：空组（sing-box 会拒绝）、互相包含形成环、名称冲突、测速间隔和容差格式。
+- 导入时，源配置里除 `proxy`、`auto` 以外的 `selector`/`urltest` 也会导入；源配置有 `proxy`/`auto` 时，以它们判断哪些节点“加入代理组”。
+- 实测和文档说明：组切换成员时，**sing-box 内部发起的连接（例如经 `proxy` 到远程 DNS 的 DoT 连接）总会被中断重建**，只有入站连接受 `interrupt_exist_connections` 控制。所以切换节点后，远程 DNS 会立即改走新节点。
+
+## 7. 已知局限
 
 - GFWList 模式下，被墙但没收录进 gfwlist 的域名（例如 `intercom.io`）会拿到污染结果；即使换成干净的 IP，这类域名往往还会被 SNI 阻断，所以正确的补救办法是加入自定义代理域名列表，而不是修 DNS。sing-box 1.14 无法“按 DNS 是否被污染”来决定路由（`override_destination` 已废弃）。
 - 规则集从 `raw.githubusercontent.com` 经代理下载；代理未就绪时首次启动会等待。
 
-## 7. 测试
+## 8. 测试
 
 - `test/generate.test.ts`：非 DNS 部分与蓝本逐字段比对（允许的差异逐项列出）；DNS 部分用 `test/dnswalk.ts` 按“模式 × 查询类型 × 域名类别”推演会问哪个服务器、最终怎么回答。
 - `test/normalize.ts`：抹平 SFM 重新保存配置时的写法差异（单元素数组写成字符串、省略默认值、时长写成 `24h0m0s` 等）。

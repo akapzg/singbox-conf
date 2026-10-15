@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { generateConfig, nodeObject, parseJsonc, parseRuleList, validate } from "../src/generate";
-import { blueprintProfile, newNode, newTailnet } from "../src/defaults";
+import { blueprintProfile, newGroup, newNode, newTailnet } from "../src/defaults";
 import { normalizeProfile } from "../src/storage";
 import { TEMPLATES, NODE_TYPES } from "../src/templates";
 import type { Profile } from "../src/types";
@@ -195,6 +195,85 @@ describe("DNS", () => {
     p.settings.remoteDns = { provider, protocol };
     const server = gen(p).dns.servers.find((s: any) => s.tag === "remote");
     expect(server).toEqual({ ...expected, tag: "remote", detour: "proxy" });
+  });
+});
+
+describe("proxy groups", () => {
+  const setup = () => {
+    const p = blueprintProfile();
+    const [hy2, reality] = p.nodes;
+    return { p, hy2, reality };
+  };
+  const byTag = (cfg: any) => Object.fromEntries(cfg.outbounds.map((o: any) => [o.tag, o]));
+
+  it("adds groups after auto, offers them in proxy, and keeps proxy as the only entry point", () => {
+    const { p, hy2, reality } = setup();
+    const g = newGroup({ tag: "us", members: [reality.id, hy2.id], defaultMember: hy2.id });
+    p.groups = [g];
+    const cfg = gen(p);
+    expect(cfg.outbounds.map((o: any) => o.tag)).toEqual(["proxy", "auto", "us", "hy2-1", "reality-1", "direct"]);
+    expect(byTag(cfg).us).toEqual({ type: "selector", tag: "us", outbounds: ["reality-1", "hy2-1"], default: "hy2-1" });
+    expect(byTag(cfg).proxy.outbounds).toEqual(["auto", "us", "hy2-1", "reality-1"]);
+    // DNS, rule-set downloads and the final route still go through proxy.
+    expect(cfg.dns.servers.find((s: any) => s.tag === "remote").detour).toBe("proxy");
+    expect(cfg.route.final).toBe("proxy");
+    expect(cfg.http_clients[0].detour).toBe("proxy");
+  });
+
+  it("uses a group as proxy's default and can hide individual nodes from proxy", () => {
+    const { p, hy2 } = setup();
+    const g = newGroup({ tag: "main", members: [hy2.id] });
+    p.groups = [g];
+    p.settings.proxyDefault = g.id;
+    p.settings.listNodesInProxy = false;
+    const proxy = byTag(gen(p)).proxy;
+    expect(proxy).toEqual({ type: "selector", tag: "proxy", outbounds: ["auto", "main"], default: "main" });
+  });
+
+  it("falls back to auto when the default group is gone", () => {
+    const { p } = setup();
+    p.settings.proxyDefault = "missing";
+    expect(byTag(gen(p)).proxy.default).toBe("auto");
+  });
+
+  it("writes url-test settings with sing-box defaults for empty fields, and nests groups", () => {
+    const { p, hy2, reality } = setup();
+    const inner = newGroup({ tag: "inner", members: [hy2.id] });
+    const outer = newGroup({ tag: "outer", type: "urltest", members: [reality.id, inner.id], tolerance: 120 });
+    p.groups = [inner, outer];
+    expect(byTag(gen(p)).outer).toEqual({
+      type: "urltest",
+      tag: "outer",
+      outbounds: ["reality-1", "inner"],
+      url: "https://www.gstatic.com/generate_204",
+      interval: "3m",
+      tolerance: 120,
+      idle_timeout: "30m",
+    });
+  });
+
+  it("drops members that no longer exist", () => {
+    const { p, hy2 } = setup();
+    p.groups = [newGroup({ tag: "g", members: ["gone", hy2.id], defaultMember: "gone" })];
+    expect(byTag(gen(p)).g).toEqual({ type: "selector", tag: "g", outbounds: ["hy2-1"] });
+  });
+
+  it("validates empty groups, cycles, names and url-test fields", () => {
+    const { p, hy2 } = setup();
+    const a = newGroup({ tag: "a" });
+    const b = newGroup({ tag: "b", members: [hy2.id] });
+    const c = newGroup({ tag: "c", members: [b.id] });
+    b.members.push(c.id);
+    const d = newGroup({ tag: "hy2-1", type: "urltest", members: [hy2.id], interval: "five", tolerance: -1 });
+    p.groups = [a, b, c, d];
+    const msgs = validate(p).map((i) => i.message).join("\n");
+    expect(msgs).toContain("代理组「a」：还没有成员");
+    expect(msgs).toContain("代理组「b」：和其他代理组互相包含");
+    expect(msgs).toContain("代理组「c」：和其他代理组互相包含");
+    expect(msgs).toContain("标签重复：hy2-1");
+    expect(msgs).toContain("测速间隔「five」格式不对");
+    expect(msgs).toContain("容差必须是非负整数");
+    expect(validate(p).find((i) => i.message.includes("「a」"))?.section).toBe("groups");
   });
 });
 

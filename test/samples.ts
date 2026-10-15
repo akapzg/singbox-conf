@@ -2,7 +2,7 @@
 // Template placeholders are filled with well-formed values so checks exercise field structure.
 // Shared by the schema test and scripts/gen-check-configs.ts (`sing-box check`).
 import { parseJsonc } from "../src/generate";
-import { blueprintProfile, newNode, newTailnet } from "../src/defaults";
+import { blueprintProfile, newGroup, newNode, newTailnet } from "../src/defaults";
 import { TEMPLATES } from "../src/templates";
 import type { Profile } from "../src/types";
 
@@ -58,6 +58,13 @@ function fullProfile(): Profile {
       }),
     ],
   });
+  // Groups: a hand-picked selector, and a url-test that nests it, used as proxy's default.
+  const [a, b, c, d] = p.nodes;
+  const pick = newGroup({ tag: "pick", type: "selector", members: [a.id, b.id, p.settings.tailnets[1].id], defaultMember: b.id });
+  const fast = newGroup({ tag: "fast", type: "urltest", members: [c.id, d.id, pick.id], interval: "5m", tolerance: 100 });
+  p.groups = [pick, fast];
+  p.settings.proxyDefault = fast.id;
+  p.settings.listNodesInProxy = false;
   return p;
 }
 

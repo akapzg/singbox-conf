@@ -1,13 +1,14 @@
-import type { Profile, ProxyNode, Tailnet } from "./types";
+import type { Profile, ProxyGroup, ProxyNode, Tailnet } from "./types";
 import { legacyServersToNodes, type LegacyServer } from "./legacy";
-import { blueprintProfile, defaultSettings, newNode, newTailnet } from "./defaults";
+import { blueprintProfile, defaultSettings, newGroup, newNode, newTailnet } from "./defaults";
 
 const KEY = "singbox-gen:profile";
 
 /** Fill missing fields so older or hand-edited exports still load. */
 export function normalizeProfile(raw: unknown): Profile {
-  const { nodes, servers, settings } = (raw ?? {}) as {
+  const { nodes, servers, groups, settings } = (raw ?? {}) as {
     nodes?: unknown;
+    groups?: unknown;
     servers?: unknown;
     settings?: Record<string, unknown>;
   };
@@ -18,6 +19,7 @@ export function normalizeProfile(raw: unknown): Profile {
   return {
     version: 2,
     nodes: list.map((n) => newNode(n)),
+    groups: Array.isArray(groups) ? (groups as Partial<ProxyGroup>[]).map((g) => newGroup(g)) : [],
     settings: normalizeSettings(settings ?? {}),
   };
 }

@@ -1,4 +1,4 @@
-import type { Profile, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
+import type { Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
 import { ENDPOINT_TYPES, NEEDS_SERVER, NODE_TYPES, SECRET_FIELDS } from "./templates";
 
 type Json = Record<string, unknown>;
@@ -410,12 +410,58 @@ export function nodeObject(n: ProxyNode): { object?: Json; endpoint?: boolean; e
   };
 }
 
-function outbounds(profile: Profile, nodes: { node: ProxyNode; object: Json; endpoint: boolean }[]): Json[] {
+type BuiltNode = { node: ProxyNode; object: Json; endpoint: boolean };
+
+/**
+ * Tag of every outbound a group may contain, by id: nodes and tailnets that made it into the
+ * config, and the groups themselves.
+ */
+export function memberTags(profile: Profile, nodes: BuiltNode[]): Map<string, string> {
+  const tags = new Map<string, string>();
+  for (const x of nodes) tags.set(x.node.id, x.node.tag);
+  for (const t of profile.settings.tailnets) if (tailnetEndpoint(t).endpoint) tags.set(t.id, t.tag);
+  for (const g of profile.groups) tags.set(g.id, g.tag);
+  return tags;
+}
+
+/** A user group as an outbound; members that no longer exist are left out. */
+function groupOutbound(g: ProxyGroup, tags: Map<string, string>): Json {
+  const outbounds = g.members.flatMap((id) => (tags.has(id) && id !== g.id ? [tags.get(id)!] : []));
+  if (g.type === "selector") {
+    const def = g.defaultMember && g.members.includes(g.defaultMember) ? tags.get(g.defaultMember) : undefined;
+    return { type: "selector", tag: g.tag, outbounds, ...(def ? { default: def } : {}) };
+  }
+  return {
+    type: "urltest",
+    tag: g.tag,
+    outbounds,
+    url: g.testUrl.trim() || URL_TEST.url,
+    interval: g.interval.trim() || URL_TEST.interval,
+    tolerance: g.tolerance ?? URL_TEST.tolerance,
+    idle_timeout: URL_TEST.idle_timeout,
+  };
+}
+
+/**
+ * `proxy` is the single entry point for proxied traffic, the remote DNS and rule-set downloads; it
+ * offers `auto` (every grouped node, fastest wins), the user's groups, and optionally each node.
+ */
+function outbounds(profile: Profile, nodes: BuiltNode[]): Json[] {
+  const s = profile.settings;
   const grouped = nodes.filter((x) => x.node.inGroups).map((x) => x.node.tag);
-  const viaTailnet = profile.settings.tailnets.filter((t) => t.asProxy).map((t) => t.tag);
+  const viaTailnet = s.tailnets.filter((t) => t.asProxy).map((t) => t.tag);
+  const tags = memberTags(profile, nodes);
+  const groups = profile.groups.map((g) => groupOutbound(g, tags));
+  const proxyDefault = s.proxyDefault !== "auto" && profile.groups.some((g) => g.id === s.proxyDefault) ? tags.get(s.proxyDefault)! : "auto";
   return [
-    { type: "selector", tag: "proxy", outbounds: ["auto", ...grouped, ...viaTailnet], default: "auto" },
+    {
+      type: "selector",
+      tag: "proxy",
+      outbounds: ["auto", ...groups.map((g) => g.tag as string), ...(s.listNodesInProxy ? grouped : []), ...viaTailnet],
+      default: proxyDefault,
+    },
     { type: "urltest", tag: "auto", outbounds: grouped, ...URL_TEST },
+    ...groups,
     ...nodes.filter((x) => !x.endpoint).map((x) => x.object),
     { type: "direct", tag: "direct" },
   ];
@@ -478,7 +524,7 @@ export function generateConfig(profile: Profile): Json {
 // ---------------------------------------------------------------------------
 // Validation
 
-export type IssueSection = "nodes" | "routing" | "tailscale" | "settings";
+export type IssueSection = "nodes" | "groups" | "routing" | "tailscale" | "settings";
 
 export interface Issue {
   level: "error" | "warning";
@@ -581,12 +627,46 @@ export function validate(profile: Profile): Issue[] {
     const routes = parseRuleList(t.routes.join("\n"));
     if (routes.invalid.length) err(at, `额外路由格式不正确：${routes.invalid.join("、")}`);
   }
+  const groupIds = new Set(profile.groups.map((g) => g.id));
+  const knownIds = new Set([...profile.nodes.map((n) => n.id), ...s.tailnets.map((t) => t.id), ...groupIds]);
+  for (const g of profile.groups) {
+    const at: Where = { section: "groups", id: g.id, label: `代理组「${g.tag || "(未命名)"}」` };
+    if (!TAG_RE.test(g.tag)) err(at, "名称只能包含字母、数字、. _ -");
+    addTag(g.tag);
+    const members = g.members.filter((id) => knownIds.has(id) && id !== g.id);
+    if (!members.length) err(at, "还没有成员，sing-box 会拒绝空的代理组");
+    if (g.type === "urltest") {
+      if (g.interval.trim() && !/^\d+(ms|s|m|h)$/.test(g.interval.trim())) err(at, `测速间隔「${g.interval}」格式不对，例如 3m、30s`);
+      if (g.tolerance !== null && (!Number.isInteger(g.tolerance) || g.tolerance < 0)) err(at, "容差必须是非负整数（毫秒）");
+    }
+  }
+  // Groups containing each other (directly or through other groups) would never resolve.
+  const inCycle = new Set<string>();
+  const visit = (id: string, path: string[]) => {
+    if (path.includes(id)) return path.slice(path.indexOf(id)).forEach((x) => inCycle.add(x));
+    const g = profile.groups.find((x) => x.id === id);
+    g?.members.filter((m) => groupIds.has(m)).forEach((m) => visit(m, [...path, id]));
+  };
+  profile.groups.forEach((g) => visit(g.id, []));
+  for (const g of profile.groups) {
+    if (inCycle.has(g.id)) {
+      err({ section: "groups", id: g.id, label: `代理组「${g.tag}」` }, "和其他代理组互相包含，形成了循环");
+    }
+  }
+
   for (const [t, n] of tags) {
     if (n < 2) continue;
     // Point at the first node or tailnet using it, so the card shows the problem.
     const node = profile.nodes.find((x) => x.tag === t);
     const tailnet = s.tailnets.find((x) => x.tag === t || dnsTag(x) === t);
-    const where: Where = node ? { section: "nodes", id: node.id } : tailnet ? { section: "tailscale", id: tailnet.id } : NODES;
+    const group = profile.groups.find((x) => x.tag === t);
+    const where: Where = node
+      ? { section: "nodes", id: node.id }
+      : tailnet
+        ? { section: "tailscale", id: tailnet.id }
+        : group
+          ? { section: "groups", id: group.id }
+          : NODES;
     err(where, `标签重复：${t}`);
   }
 
