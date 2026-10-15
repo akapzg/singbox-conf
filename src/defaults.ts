@@ -23,13 +23,19 @@ export const CUSTOM_DNS_TEMPLATE = `{
   "tls": { "enabled": true, "server_name": "cloudflare-dns.com" }
 }`;
 
+/** A fresh Clash API secret: without one, any web page can reach the API on 127.0.0.1. */
+export function randomSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(bytes, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 16);
+}
+
 export const defaultSettings = (): Settings => ({
   platform: "apple",
   defaultMode: "GFWList",
   remoteDns: { provider: "google", protocol: "tls", custom: CUSTOM_DNS_TEMPLATE },
   clientSubnet: "",
   clashController: "127.0.0.1:9090",
-  clashSecret: "",
+  clashSecret: randomSecret(),
   directDomains: [],
   proxyRules: [],
   tailnets: [],

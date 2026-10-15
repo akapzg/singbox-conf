@@ -21,6 +21,7 @@ function personalProfile(): Profile {
       { name: "us-la3-zgo", host: "us-la3-zgo.example.com" },
     ],
   });
+  p.settings.clashSecret = ""; // the baseline ran without one
   p.settings.steam = true;
   p.settings.blockIcloudQuic = true;
   p.settings.tailnets = [

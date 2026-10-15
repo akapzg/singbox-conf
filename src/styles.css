@@ -5,24 +5,17 @@
   :root {
     --sb-warn: #8a5a00;
     --sb-ok: #1d7a3f;
-    --sb-code-bg: #0f1720;
-    --sb-code-text: #d6e2ee;
-    --sb-tok-key: #8cc4ff;
-    --sb-tok-str: #b5e3a0;
-    --sb-tok-num: #f2c27b;
-    --sb-tok-lit: #e0a3f5;
   }
   .dark {
     --sb-warn: #e0a83a;
     --sb-ok: #5cc483;
-    --sb-code-bg: #0b0e12;
   }
 
   .code {
     margin: 0;
     padding: 14px;
-    background: var(--sb-code-bg);
-    color: var(--sb-code-text);
+    background: color-mix(in oklab, var(--muted) 45%, var(--card));
+    color: var(--foreground);
     font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
@@ -32,17 +25,18 @@
     outline: 2px solid var(--ring);
     outline-offset: -2px;
   }
+  /* Same palette as the editors (--cm-* below). */
   .tok-key {
-    color: var(--sb-tok-key);
+    color: var(--cm-key);
   }
   .tok-str {
-    color: var(--sb-tok-str);
+    color: var(--cm-string);
   }
   .tok-num {
-    color: var(--sb-tok-num);
+    color: var(--cm-number);
   }
   .tok-lit {
-    color: var(--sb-tok-lit);
+    color: var(--cm-literal);
   }
 
   .dot {

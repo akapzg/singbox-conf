@@ -351,12 +351,65 @@ const PLATFORMS: { value: Platform; label: string; note: string }[] = [
   { value: "windows", label: "Windows（命令行）", note: "" },
 ];
 
-const MODES: { value: Settings["defaultMode"]; label: string }[] = [
-  { value: "GFWList", label: "GFWList：只有 gfwlist 里的走代理" },
-  { value: "Non-CN", label: "Non-CN：国内直连，其余走代理" },
-  { value: "Global", label: "Global：全部走代理" },
-  { value: "Direct", label: "Direct：全部直连" },
+const MODES: { value: Settings["defaultMode"]; label: string; description: string }[] = [
+  { value: "GFWList", label: "GFWList", description: "只有 gfwlist 里的网站走代理，其余直连。走代理的最少。" },
+  { value: "Non-CN", label: "Non-CN", description: "国内的网站和 IP 直连，其余都走代理。" },
+  { value: "Global", label: "Global", description: "除局域网外全部走代理，自定义的直连名单也不生效。" },
+  { value: "Direct", label: "Direct", description: "全部直连，相当于暂时关掉代理。" },
 ];
+
+/** Radio options as cards with a line of explanation each. */
+function ChoiceCards<T extends string>(props: {
+  value: T;
+  options: { value: T; label: string; description: string }[];
+  onChange: (v: T) => void;
+  ariaLabel: string;
+}) {
+  const pick = (i: number) => props.onChange(props.options[(i + props.options.length) % props.options.length].value);
+  return (
+    <div role="radiogroup" aria-label={props.ariaLabel} className="grid gap-2 sm:grid-cols-2">
+      {props.options.map((o, i) => {
+        const checked = o.value === props.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            onClick={() => props.onChange(o.value)}
+            onKeyDown={(e) => {
+              const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+              if (!step) return;
+              e.preventDefault();
+              pick(i + step);
+              const next = e.currentTarget.parentElement?.children[(i + step + props.options.length) % props.options.length];
+              (next as HTMLElement | undefined)?.focus();
+            }}
+            className={cn(
+              "flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/30",
+              checked ? "border-primary bg-primary/[0.04]" : "hover:bg-muted/50",
+            )}
+          >
+            <span
+              className={cn(
+                "mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border",
+                checked ? "border-primary" : "border-input",
+              )}
+              aria-hidden
+            >
+              {checked && <span className="size-1.5 rounded-full bg-primary" />}
+            </span>
+            <span className="flex flex-col gap-0.5">
+              <span className="text-xs font-medium">{o.label}</span>
+              <span className="text-xs/relaxed text-muted-foreground">{o.description}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /** Line-based list editor with live parse feedback. */
 function ListEditor(props: {
@@ -692,13 +745,7 @@ function RoutingCard(props: { settings: Settings; onChange: (patch: Partial<Sett
   return (
     <>
       <Panel title="默认模式" description="启动时使用的模式，运行中可在客户端或 Clash API 中切换">
-        <SimpleSelect
-          value={s.defaultMode}
-          options={MODES}
-          onChange={(defaultMode) => props.onChange({ defaultMode })}
-          className="sm:w-1/2"
-          ariaLabel="默认模式"
-        />
+        <ChoiceCards value={s.defaultMode} options={MODES} onChange={(defaultMode) => props.onChange({ defaultMode })} ariaLabel="默认模式" />
       </Panel>
       <Panel
         title="自定义列表"
@@ -1353,10 +1400,10 @@ export default function App() {
               {TABS.map((t) => {
                 const state = tabState(t.id);
                 return (
-                  <TabsTrigger key={t.id} value={t.id} className="px-2.5 text-[13px]">
+                  <TabsTrigger key={t.id} value={t.id} className="px-2 text-[13px] sm:px-2.5">
                     {t.label}
                     {counts[t.id] !== undefined && (
-                      <span className="rounded-full bg-muted px-1.5 text-[11px] leading-4 text-muted-foreground tabular-nums">{counts[t.id]}</span>
+                      <span className="hidden rounded-full bg-muted px-1.5 text-[11px] leading-4 text-muted-foreground tabular-nums min-[420px]:inline">{counts[t.id]}</span>
                     )}
                     {state && <span className={`dot ${state}`} aria-label={state === "error" ? "有错误" : "有提醒"} />}
                   </TabsTrigger>
