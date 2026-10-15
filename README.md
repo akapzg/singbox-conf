@@ -1,0 +1,56 @@
+# sing-box 配置生成器
+
+纯前端的 sing-box 配置生成器：在网页里填写代理服务器和少量偏好，实时生成完整的 `config.json`，可以复制或下载。
+
+- 需要 sing-box **1.14** 及以上（Apple 平台的 SFM/SFI、Android 的 SFA，或 Linux/Windows 命令行版）。
+- 没有后端，运行时不发出任何网络请求；设置只保存在当前浏览器的 localStorage 里。导出的设置文件含有密码，请妥善保管。
+- 分流策略是一套固定、经过实测的规则（四种模式：GFWList、Non-CN、Global、Direct），设计理由见 [DESIGN.md](DESIGN.md)。需要深度定制时，直接修改生成的 JSON。
+
+## 可以设置什么
+
+| 卡片 | 内容 |
+|---|---|
+| 节点 | 用 JSON 编写（可写注释），从协议模板开始：Hysteria2、VLESS（Vision / Reality）、VMess、Trojan、Shadowsocks、ShadowTLS、TUIC、AnyTLS、Hysteria、NaiveProxy、Snell、SOCKS、HTTP、SSH、Tor，以及 WireGuard、OpenConnect、OpenVPN 端点 |
+| 分流 | 默认模式；直连域名；代理域名和 IP（适合被墙但不在 gfwlist 里的网站） |
+| Tailscale | 任意多个 tailnet：端点用 JSON 编写（可写注释）；MagicDNS、tailnet 默认 DNS、分域 DNS、额外路由、作为代理出口 |
+| 平台与高级设置 | 目标平台；代理 DNS 服务器（Google / Cloudflare / Quad9，DoT 或 DoH）；ECS；Clash API；Steam、禁止 iCloud 使用 QUIC |
+
+## 浏览器设置建议
+
+浏览器的“安全 DNS”（DoH）请保持“自动”或关闭。手动指定 DoH 服务商会绕过 sing-box 的 DNS 分流。
+
+## 开发
+
+```bash
+npm install
+npm run dev      # 本地开发
+npm test         # 规则推演和蓝本比对
+npm run build    # 输出到 dist/
+
+# 用真实的 sing-box 检查每个节点模板和功能组合生成的配置
+# （下载脚本会用 GitHub 发布页公布的 SHA-256 校验二进制）
+SING_BOX=$(python3 scripts/fetch-sing-box.py 1.14.3 /tmp/sing-box) npm run check:singbox
+```
+
+推送到 GitHub 后，CI（`.github/workflows/ci.yml`）会跑测试和构建，并在 Linux、macOS、Windows 上分别执行上面的检查。
+
+## 自部署
+
+`npm run build` 后，把 `dist/` 放到任意静态托管（Nginx、Caddy、Cloudflare Pages、GitHub Pages 等）。资源用相对路径引用，挂在子路径下也能用。
+通过 http 访问时，浏览器可能禁用剪贴板 API，页面会自动退回旧的复制方式。
+
+## 结构
+
+- `src/generate.ts`：配置生成器和校验。
+- `src/types.ts`：设置的数据模型；`src/defaults.ts`：默认值；`src/templates.ts`：节点协议模板。
+- `src/legacy.ts`：把旧版（表单）保存的服务器迁移为 JSON 节点。
+- `src/App.tsx`：界面；`src/storage.ts`：本地保存和导入时的兼容处理。
+- `test/generate.test.ts`：
+  - 用一份“个人配置”还原蓝本（`test/fixtures/tiger-baseline.json`，已匿名化）的非 DNS 部分；
+  - 默认配置不含任何个人设置；
+  - DNS 部分用 `test/dnswalk.ts` 按“模式 × 查询类型 × 域名类别”推演会问哪个服务器、最终怎么回答。
+- `test/normalize.ts`：抹平 SFM 重新保存配置时的写法差异（单元素数组、默认值、时长格式）。
+- `test/samples.ts`：覆盖全部节点模板和功能、平台组合的示例配置，供 schema 测试和 `sing-box check` 共用。
+- `test/schema.test.ts`：用 sing-box 1.14.3 官方 JSON schema（`test/fixtures/sing-box-1.14.3.schema.json`）校验所有示例配置。
+- `test/storage.test.ts`：多套配置的存储和旧数据迁移。
+- `scripts/`：下载并校验官方 sing-box（`fetch-sing-box.py`），对示例配置跑 `sing-box check`（`singbox-check.ts`）。

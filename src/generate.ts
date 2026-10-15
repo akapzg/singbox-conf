@@ -1,0 +1,558 @@
+import type { Profile, ProxyNode, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
+import { ENDPOINT_TYPES, NEEDS_SERVER, NODE_TYPES, SECRET_FIELDS } from "./templates";
+
+type Json = Record<string, unknown>;
+
+const URL_TEST = { url: "https://www.gstatic.com/generate_204", interval: "3m", tolerance: 50, idle_timeout: "30m" };
+
+const GFW = ["gfwlist", "gfwlist-custom-domains"];
+const GFW_IPS = ["telegram-ip", "gfwlist-custom-ips"];
+const CUSTOM_PROXY = ["gfwlist-custom-domains", "gfwlist-custom-ips"];
+const CN_SITE = "geosite-geolocation-cn";
+const CN_IP = "geoip-cn";
+const CUSTOM_DIRECT = "custom-direct-domains";
+const PUBLIC_V6 = ["2000::/3"];
+const IPV6_CARRIERS = ["AAAA", "HTTPS", "SVCB"];
+const LOCAL_DOMAINS = {
+  domain: ["localhost"],
+  domain_suffix: [".local", ".lan", ".localdomain", ".home.arpa", ".internal", ".intranet"],
+};
+
+export const REMOTE_DNS: Record<RemoteDnsProvider, { label: string; address: string; serverName: string }> = {
+  google: { label: "Google", address: "8.8.8.8", serverName: "dns.google" },
+  cloudflare: { label: "Cloudflare", address: "1.1.1.1", serverName: "cloudflare-dns.com" },
+  quad9: { label: "Quad9", address: "9.9.9.9", serverName: "dns.quad9.net" },
+};
+
+const and = (rules: Json[], extra: Json = {}): Json => ({ type: "logical", mode: "and", rules, ...extra });
+const or = (rules: Json[], extra: Json = {}): Json => ({ type: "logical", mode: "or", rules, ...extra });
+
+const noPublicV6Interface: Json = { default_interface_address: PUBLIC_V6, invert: true };
+
+const dnsTag = (t: Tailnet) => `${t.tag}-dns`;
+const proxyList = (s: Settings) => parseRuleList(s.proxyRules.join("\n"));
+const hasProxyDomains = (s: Settings) => proxyList(s).domains.length > 0;
+const hasProxyRules = (s: Settings) => {
+  const { domains, cidrs } = proxyList(s);
+  return domains.length + cidrs.length > 0;
+};
+const hasDns = (t: Tailnet) => t.magicDns || parseDomainList(t.dnsDomains.join("\n")).domains.length > 0;
+
+// ---------------------------------------------------------------------------
+// Input parsing
+
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)*[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$/;
+const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+function parseCidr(text: string): string | null {
+  const [addr, len, ...rest] = text.split("/");
+  if (rest.length) return null;
+  const v4 = IPV4_RE.test(addr);
+  const v6 = !v4 && addr.includes(":") && /^[0-9a-f:.]+$/.test(addr) && addr.split("::").length <= 2;
+  if (!v4 && !v6) return null;
+  const max = v4 ? 32 : 128;
+  if (len === undefined) return `${addr}/${max}`;
+  if (!/^\d{1,3}$/.test(len) || Number(len) > max) return null;
+  return `${addr}/${Number(len)}`;
+}
+
+function cleanLines(text: string): { raw: string; line: string }[] {
+  return text
+    .split(/[\n,]/)
+    .map((raw) => ({ raw: raw.trim(), line: raw.replace(/#.*/, "").trim().toLowerCase() }))
+    .filter((x) => x.line);
+}
+
+const cleanDomain = (line: string) => line.replace(/^\*?\./, "").replace(/\.$/, "");
+
+/** Parse user input (one domain per line, `#` comments) into clean, de-duplicated suffixes. */
+export function parseDomainList(text: string): { domains: string[]; invalid: string[] } {
+  const domains: string[] = [];
+  const invalid: string[] = [];
+  for (const { raw, line } of cleanLines(text)) {
+    const d = cleanDomain(line);
+    if (!DOMAIN_RE.test(d)) invalid.push(raw);
+    else if (!domains.includes(d)) domains.push(d);
+  }
+  return { domains, invalid };
+}
+
+/** Like parseDomainList, but lines may also be IPv4/IPv6 addresses or prefixes. */
+export function parseRuleList(text: string): { domains: string[]; cidrs: string[]; invalid: string[] } {
+  const domains: string[] = [];
+  const cidrs: string[] = [];
+  const invalid: string[] = [];
+  for (const { raw, line } of cleanLines(text)) {
+    const cidr = parseCidr(line);
+    if (cidr) {
+      if (!cidrs.includes(cidr)) cidrs.push(cidr);
+      continue;
+    }
+    // Looks like an address (digits and dots, or has ':' or '/') but did not parse as one.
+    if (/^[\d./]+$/.test(line) || /[:/]/.test(line)) {
+      invalid.push(raw);
+      continue;
+    }
+    const d = cleanDomain(line);
+    if (!DOMAIN_RE.test(d)) invalid.push(raw);
+    else if (!domains.includes(d)) domains.push(d);
+  }
+  return { domains, cidrs, invalid };
+}
+
+/** JSON with `//` and `/* *\/` comments (outside strings). */
+export function parseJsonc(text: string): unknown {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
+      out += text.slice(start, i + 1);
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end < 0 ? text.length : end + 1;
+    } else {
+      out += c;
+    }
+  }
+  return JSON.parse(out);
+}
+
+/** The endpoint object a tailnet produces, or an error message. */
+export function tailnetEndpoint(t: Tailnet): { endpoint?: Json; error?: string } {
+  let body: unknown;
+  try {
+    body = parseJsonc(t.endpoint);
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "必须是一个 JSON 对象" };
+  const { type: _type, tag: _tag, ...rest } = body as Json;
+  return { endpoint: { type: "tailscale", tag: t.tag, ...rest } };
+}
+
+// ---------------------------------------------------------------------------
+// DNS
+
+/**
+ * Domains whose traffic the route rules send `direct` regardless of the resolved IP.
+ * Mirrors the Direct / custom direct / GFWList / Non-CN route rules below.
+ */
+function directByDomain(s: Settings): Json {
+  return or([
+    { clash_mode: "Direct" },
+    and([{ clash_mode: "Global", invert: true }, { rule_set: CUSTOM_DIRECT }]),
+    and([{ clash_mode: "GFWList" }, { rule_set: GFW, invert: true }]),
+    and([
+      { clash_mode: "Non-CN" },
+      ...(hasProxyDomains(s) ? [{ rule_set: "gfwlist-custom-domains", invert: true }] : []),
+      s.steam ? or([{ rule_set: CN_SITE }, { domain_suffix: ["steamcontent.com"] }]) : { rule_set: CN_SITE },
+    ]),
+  ]);
+}
+
+/** Custom proxy domains, outside Direct mode and unless also listed as direct. */
+const proxiedByDomain: Json = and([
+  { clash_mode: "Direct", invert: true },
+  { rule_set: CUSTOM_DIRECT, invert: true },
+  { rule_set: "gfwlist-custom-domains" },
+]);
+
+/**
+ * DNS policy:
+ * - Traffic that goes direct is resolved by the local (network-provided) resolver only.
+ * - Non-CN mode asks the local resolver and the remote one in parallel; a domestic or private
+ *   local answer wins, anything else uses the remote answer.
+ * - Proxied traffic is resolved by the remote resolver through the proxy, IPv4 only: AAAA, HTTPS
+ *   and SVCB are answered empty so no IPv6 address (including HTTPS `ipv6hint`) reaches the
+ *   client, and every proxied connection leaves through the same server as its IPv4 peers.
+ *   Connections an app makes to IPv6 on its own are not blocked; they are routed by sniffed domain.
+ * - Without a public IPv6 address locally, AAAA for direct traffic is empty.
+ */
+function dnsRules(s: Settings): Json[] {
+  const ecs = s.clientSubnet.trim() ? { client_subnet: s.clientSubnet.trim() } : {};
+  const direct = directByDomain(s);
+  const tailnetRules: Json[] = [
+    ...s.tailnets.flatMap((t) => {
+      const { domains } = parseDomainList(t.dnsDomains.join("\n"));
+      return domains.length ? [{ domain_suffix: domains, action: "route", server: dnsTag(t) }] : [];
+    }),
+    ...s.tailnets.filter((t) => t.magicDns).map((t) => ({ preferred_by: dnsTag(t), action: "route", server: dnsTag(t) })),
+  ];
+  const customProxy: Json[] = hasProxyDomains(s)
+    ? [
+        and([{ query_type: IPV6_CARRIERS }, proxiedByDomain], { action: "predefined", rcode: "NOERROR" }),
+        { ...proxiedByDomain, action: "route", server: "remote" },
+      ]
+    : [];
+  return [
+    ...tailnetRules,
+    { preferred_by: "local", action: "route", server: "local" },
+    { ...LOCAL_DOMAINS, action: "route", server: "local" },
+    ...(s.steam ? [{ domain: ["lancache.steamcontent.com"], action: "route", server: "local" }] : []),
+
+    // Explicit proxy list.
+    ...customProxy,
+
+    // Direct traffic.
+    and([{ query_type: "AAAA" }, noPublicV6Interface, direct], { action: "predefined", rcode: "NOERROR" }),
+    { ...direct, action: "route", server: "local" },
+
+    // Non-CN mode, domain not known to be domestic: let the local answer decide.
+    and([{ clash_mode: "Non-CN" }, { query_type: ["A", "AAAA"] }], {
+      action: "evaluate",
+      server: "local",
+      tag: "local-answer",
+      timeout: "500ms",
+    }),
+    { match_response: "local-answer", ip_is_private: true, action: "respond", race: true },
+    and(
+      [
+        { query_type: "AAAA" },
+        noPublicV6Interface,
+        { match_response: "local-answer", response_rcode: "NOERROR", rule_set: CN_IP },
+      ],
+      { action: "predefined", rcode: "NOERROR", race: true },
+    ),
+    { match_response: "local-answer", response_rcode: "NOERROR", rule_set: CN_IP, action: "respond", race: true },
+
+    // Proxied traffic: IPv4 only. The remote query is speculative so it runs alongside the local one above.
+    { query_type: IPV6_CARRIERS, action: "predefined", rcode: "NOERROR" },
+    { action: "evaluate", server: "remote", tag: "remote-answer", speculative: true, ...ecs },
+    { match_response: "remote-answer", action: "respond" },
+    { action: "predefined", rcode: "SERVFAIL" },
+  ];
+}
+
+export function remoteDnsServer(provider: RemoteDnsProvider, protocol: RemoteDnsProtocol): Json {
+  const p = REMOTE_DNS[provider];
+  return {
+    type: protocol,
+    tag: "remote",
+    server: p.address,
+    server_port: protocol === "tls" ? 853 : 443,
+    ...(protocol === "https" ? { path: "/dns-query" } : {}),
+    tls: { enabled: true, server_name: p.serverName },
+    detour: "proxy",
+  };
+}
+
+function dnsServers(s: Settings): Json[] {
+  return [
+    { type: "local", tag: "local", neighbor_domain: [".", ".lan", ".home.arpa"] },
+    ...s.tailnets.filter(hasDns).map((t) => ({
+      type: "tailscale",
+      tag: dnsTag(t),
+      endpoint: t.tag,
+      ...(t.acceptDefaultResolvers ? { accept_default_resolvers: true } : {}),
+      accept_search_domain: true,
+    })),
+    remoteDnsServer(s.remoteDns.provider, s.remoteDns.protocol),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Route
+
+function routeRules(s: Settings): Json[] {
+  const gfwAll = [...GFW, ...GFW_IPS];
+  const tailnetTags = s.tailnets.map((t) => t.tag);
+  const tailnetExtra = s.tailnets.flatMap((t) => {
+    const { domains, cidrs } = parseRuleList(t.routes.join("\n"));
+    if (!domains.length && !cidrs.length) return [];
+    return [
+      {
+        ...(domains.length ? { domain_suffix: domains } : {}),
+        ...(cidrs.length ? { ip_cidr: cidrs } : {}),
+        action: "route",
+        outbound: t.tag,
+      },
+    ];
+  });
+  return [
+    // No public IPv6 locally: refuse direct CN IPv6 before the handshake so apps fall back to IPv4.
+    and(
+      [
+        { network: ["tcp", "udp"], ip_version: 6, ip_cidr: PUBLIC_V6 },
+        { rule_set: CN_IP },
+        noPublicV6Interface,
+        ...(tailnetTags.length ? [{ preferred_by: tailnetTags, invert: true }] : []),
+        { port: 53, invert: true },
+        or([{ clash_mode: "Non-CN" }, and([{ clash_mode: "GFWList" }, { rule_set: gfwAll, invert: true }])]),
+      ],
+      { action: "reject", method: "default", no_drop: true },
+    ),
+    { action: "sniff" },
+    or([{ protocol: "dns" }, { port: 53 }], { action: "hijack-dns" }),
+    ...(s.blockIcloudQuic
+      ? [{ network: "udp", port: 443, domain: ["gateway.icloud.com"], action: "reject", method: "default", no_drop: true }]
+      : []),
+    ...s.tailnets.map((t) => ({ preferred_by: t.tag, action: "route", outbound: t.tag })),
+    ...tailnetExtra,
+    { ...LOCAL_DOMAINS, action: "route", outbound: "direct" },
+    { ip_is_private: true, action: "route", outbound: "direct" },
+    { clash_mode: "Direct", action: "route", outbound: "direct" },
+    and([{ clash_mode: "Global", invert: true }, { rule_set: CUSTOM_DIRECT }], { action: "route", outbound: "direct" }),
+    ...(hasProxyRules(s) ? [{ rule_set: CUSTOM_PROXY, action: "route", outbound: "proxy" }] : []),
+    and([{ clash_mode: "GFWList" }, { rule_set: gfwAll, invert: true }], { action: "route", outbound: "direct" }),
+    and(
+      [
+        { clash_mode: "Non-CN" },
+        or([
+          { rule_set: CN_SITE },
+          ...(s.steam ? [{ domain_suffix: ["steamcontent.com"] }] : []),
+          { ip_is_private: true },
+          { rule_set: CN_IP },
+        ]),
+      ],
+      { action: "route", outbound: "direct" },
+    ),
+    { clash_mode: "Global", action: "route", outbound: "proxy" },
+  ];
+}
+
+const remoteRuleSet = (tag: string, url: string): Json => ({
+  type: "remote",
+  tag,
+  format: "binary",
+  url,
+  update_interval: "1d",
+});
+
+// Never-matching body for empty inline rule-sets.
+const NEVER = [{ domain_regex: ["a^"] }];
+
+function ruleSets(s: Settings): Json[] {
+  const direct = parseDomainList(s.directDomains.join("\n")).domains;
+  const proxy = proxyList(s);
+  return [
+    remoteRuleSet(CN_IP, "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"),
+    remoteRuleSet(CN_SITE, "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs"),
+    remoteRuleSet("gfwlist", "https://raw.githubusercontent.com/Dreista/sing-box-rule-set-cn/rule-set/gfwlist.txt.srs"),
+    {
+      type: "inline",
+      tag: "telegram-ip",
+      rules: [
+        {
+          ip_cidr: [
+            "91.105.192.0/23",
+            "91.108.4.0/22",
+            "91.108.8.0/21",
+            "91.108.16.0/21",
+            "91.108.36.0/22",
+            "91.108.56.0/22",
+            "95.161.64.0/20",
+            "95.161.80.0/24",
+            "95.161.84.0/22",
+            "149.154.160.0/20",
+            "185.76.151.0/24",
+            "2001:b28:f23d::/48",
+            "2001:b28:f23f::/48",
+            "2001:67c:4e8::/48",
+            "2001:b28:f23c::/48",
+            "2a0a:f280::/32",
+          ],
+        },
+      ],
+    },
+    { type: "inline", tag: "gfwlist-custom-domains", rules: proxy.domains.length ? [{ domain_suffix: proxy.domains }] : NEVER },
+    { type: "inline", tag: "gfwlist-custom-ips", rules: proxy.cidrs.length ? [{ ip_cidr: proxy.cidrs }] : NEVER },
+    { type: "inline", tag: CUSTOM_DIRECT, rules: direct.length ? [{ domain_suffix: direct }] : NEVER },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+/** The outbound or endpoint a node produces, or an error message. */
+export function nodeObject(n: ProxyNode): { object?: Json; endpoint?: boolean; error?: string } {
+  let body: unknown;
+  try {
+    body = parseJsonc(n.body);
+  } catch (e) {
+    return { error: `JSON 有误：${(e as Error).message}` };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "必须是一个 JSON 对象" };
+  const { type, tag: _tag, ...rest } = body as Json;
+  if (typeof type !== "string" || !NODE_TYPES.includes(type)) {
+    return { error: `type 必须是以下之一：${NODE_TYPES.join("、")}` };
+  }
+  return {
+    // Proxy hosts resolve through the local resolver: they are reached directly.
+    object: { type, tag: n.tag, ...rest, ...("domain_resolver" in rest ? {} : { domain_resolver: "local" }) },
+    endpoint: ENDPOINT_TYPES.includes(type),
+  };
+}
+
+function outbounds(profile: Profile, nodes: { node: ProxyNode; object: Json; endpoint: boolean }[]): Json[] {
+  const grouped = nodes.filter((x) => x.node.inGroups).map((x) => x.node.tag);
+  const viaTailnet = profile.settings.tailnets.filter((t) => t.asProxy).map((t) => t.tag);
+  return [
+    { type: "selector", tag: "proxy", outbounds: ["auto", ...grouped, ...viaTailnet], default: "auto" },
+    { type: "urltest", tag: "auto", outbounds: grouped, ...URL_TEST },
+    ...nodes.filter((x) => !x.endpoint).map((x) => x.object),
+    { type: "direct", tag: "direct" },
+  ];
+}
+
+function tunInbound(s: Settings): Json {
+  return {
+    type: "tun",
+    tag: "tun-in",
+    address: ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+    auto_route: true,
+    // Linux: nftables-based redirect, recommended by sing-box for routing and performance.
+    ...(s.platform === "linux" ? { auto_redirect: true } : {}),
+    strict_route: true,
+  };
+}
+
+export function generateConfig(profile: Profile): Json {
+  const s = profile.settings;
+  const nodes = profile.nodes.flatMap((node) => {
+    const { object, endpoint } = nodeObject(node);
+    return object ? [{ node, object, endpoint: !!endpoint }] : [];
+  });
+  const endpoints = [
+    ...s.tailnets.map((t) => tailnetEndpoint(t).endpoint).filter((e): e is Json => !!e),
+    ...nodes.filter((x) => x.endpoint).map((x) => x.object),
+  ];
+  return {
+    $schema: "https://sing-box.sagernet.org/schema.json",
+    log: { level: "info", timestamp: true },
+    dns: {
+      servers: dnsServers(s),
+      rules: dnsRules(s),
+      final: "remote",
+      reverse_mapping: true,
+    },
+    http_clients: [{ tag: "rule-set-download", detour: "proxy" }],
+    ...(endpoints.length ? { endpoints } : {}),
+    inbounds: [tunInbound(s)],
+    outbounds: outbounds(profile, nodes),
+    route: {
+      rules: routeRules(s),
+      rule_set: ruleSets(s),
+      final: "proxy",
+      auto_detect_interface: true,
+      default_http_client: "rule-set-download",
+      default_domain_resolver: "local",
+    },
+    experimental: {
+      cache_file: { enabled: true },
+      clash_api: {
+        ...(s.clashController.trim() ? { external_controller: s.clashController.trim() } : {}),
+        ...(s.clashSecret ? { secret: s.clashSecret } : {}),
+        default_mode: s.defaultMode,
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+
+export interface Issue {
+  level: "error" | "warning";
+  message: string;
+}
+
+const TAG_RE = /^[A-Za-z0-9._-]+$/;
+
+/** Paths of secret-like fields left empty anywhere in a node, e.g. `tls.reality.public_key`. */
+function emptySecretPaths(v: unknown, path = ""): string[] {
+  if (Array.isArray(v)) return v.flatMap((x, i) => emptySecretPaths(x, `${path}[${i}]`));
+  if (!v || typeof v !== "object") return [];
+  return Object.entries(v).flatMap(([k, x]) => {
+    const p = path ? `${path}.${k}` : k;
+    return x === "" && SECRET_FIELDS.includes(k) ? [p] : emptySecretPaths(x, p);
+  });
+}
+
+/** Shadowsocks 2022 passwords are base64 keys sized to the cipher (sing-box refuses to start otherwise). */
+function shadowsocks2022KeyError(o: Json): string | undefined {
+  const method = String(o.method ?? "");
+  if (o.type !== "shadowsocks" || !method.startsWith("2022-") || typeof o.password !== "string" || !o.password) return;
+  const size = method.includes("aes-128") ? 16 : 32;
+  for (const key of o.password.split(":")) {
+    let bytes = -1;
+    try {
+      bytes = atob(key).length;
+    } catch {
+      // not base64
+    }
+    if (bytes !== size) {
+      return `${method} 的密码必须是 ${size} 字节的 base64 密钥（可用 sing-box generate rand --base64 ${size} 生成）`;
+    }
+  }
+}
+const RESERVED_TAGS = ["proxy", "auto", "direct", "local", "remote", "tun-in"];
+
+/** Problems that would make sing-box reject the config or leave it without a usable proxy. */
+export function validate(profile: Profile): Issue[] {
+  const s = profile.settings;
+  const issues: Issue[] = [];
+  const err = (message: string) => issues.push({ level: "error", message });
+  const warn = (message: string) => issues.push({ level: "warning", message });
+  const tags = new Map<string, number>();
+  const addTag = (t: string) => tags.set(t, (tags.get(t) ?? 0) + 1);
+  RESERVED_TAGS.forEach(addTag);
+
+  const nodeTags = new Set(profile.nodes.map((n) => n.tag));
+  const tailnetTags = new Set(s.tailnets.map((t) => t.tag));
+  if (profile.nodes.length === 0) err("至少需要一个节点");
+  else if (!profile.nodes.some((n) => n.inGroups)) err("至少要有一个节点加入代理组");
+  for (const n of profile.nodes) {
+    const label = `节点「${n.tag || "(未命名)"}」`;
+    if (!TAG_RE.test(n.tag)) err(`${label}：标签只能包含字母、数字、. _ -`);
+    addTag(n.tag);
+    const { object, error } = nodeObject(n);
+    if (error) {
+      err(`${label}：${error}`);
+      continue;
+    }
+    const o = object!;
+    if (NEEDS_SERVER.includes(String(o.type)) && !o.server) err(`${label}：缺少 server`);
+    if (typeof o.server === "string" && /(^|\.)example\.com$/.test(o.server)) warn(`${label}：server 还是模板里的示例地址`);
+    for (const path of emptySecretPaths(o)) warn(`${label}：${path} 为空，sing-box 可能无法加载`);
+    const ssKeyError = shadowsocks2022KeyError(o);
+    if (ssKeyError) err(`${label}：${ssKeyError}`);
+    if (typeof o.detour === "string" && !nodeTags.has(o.detour) && !tailnetTags.has(o.detour) && o.detour !== "direct") {
+      err(`${label}：detour 指向的「${o.detour}」不存在`);
+    }
+  }
+
+  const stateDirs = new Map<string, string>();
+  for (const t of s.tailnets) {
+    const label = `Tailscale「${t.tag || "(未命名)"}」`;
+    if (!TAG_RE.test(t.tag)) err(`${label}：标签只能包含字母、数字、. _ -`);
+    addTag(t.tag);
+    if (hasDns(t)) addTag(dnsTag(t));
+    const { endpoint, error } = tailnetEndpoint(t);
+    if (error) err(`${label}：端点 JSON 有误：${error}`);
+    if (endpoint) {
+      const dir = String(endpoint.state_directory ?? "tailscale");
+      if (stateDirs.has(dir)) err(`${label}：state_directory「${dir}」与「${stateDirs.get(dir)}」重复，每个 tailnet 需要独立目录`);
+      stateDirs.set(dir, t.tag);
+      if (t.asProxy && !endpoint.exit_node) warn(`${label}：作为代理出口但没有设置 exit_node，经它的流量只能到达 tailnet 内的地址`);
+    }
+    const dns = parseDomainList(t.dnsDomains.join("\n"));
+    if (dns.invalid.length) err(`${label}：分域 DNS 域名格式不正确：${dns.invalid.join("、")}`);
+    const routes = parseRuleList(t.routes.join("\n"));
+    if (routes.invalid.length) err(`${label}：额外路由格式不正确：${routes.invalid.join("、")}`);
+  }
+  for (const [t, n] of tags) if (n > 1) err(`标签重复：${t}`);
+
+  const subnet = s.clientSubnet.trim();
+  if (subnet && !parseCidr(subnet.toLowerCase())) err(`ECS 网段格式不正确：${subnet}`);
+  const direct = parseDomainList(s.directDomains.join("\n"));
+  if (direct.invalid.length) err(`直连域名格式不正确：${direct.invalid.join("、")}`);
+  const proxy = parseRuleList(s.proxyRules.join("\n"));
+  if (proxy.invalid.length) err(`代理域名或 IP 格式不正确：${proxy.invalid.join("、")}`);
+  if (s.clashController.trim() && !s.clashSecret) warn("Clash API 已开启但没有设置 secret");
+  return issues;
+}

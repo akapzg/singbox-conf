@@ -1,0 +1,63 @@
+import type { Profile, ProxyNode, Settings, Tailnet } from "./types";
+import { TEMPLATES } from "./templates";
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+export function newNode(partial: Partial<ProxyNode> = {}): ProxyNode {
+  const template = TEMPLATES[0];
+  return { id: uid(), tag: `${template.tagPrefix}-1`, body: template.body, inGroups: true, ...partial };
+}
+
+/** A tag based on the template's prefix that is not used yet. */
+export function freshTag(prefix: string, used: string[]): string {
+  for (let i = 1; ; i++) if (!used.includes(`${prefix}-${i}`)) return `${prefix}-${i}`;
+}
+
+export const defaultSettings = (): Settings => ({
+  platform: "apple",
+  defaultMode: "GFWList",
+  remoteDns: { provider: "google", protocol: "tls" },
+  clientSubnet: "",
+  clashController: "127.0.0.1:9090",
+  clashSecret: "",
+  directDomains: [],
+  proxyRules: [],
+  tailnets: [],
+  steam: false,
+  blockIcloudQuic: false,
+});
+
+export const TAILSCALE_ENDPOINT_TEMPLATE = `{
+  // 登录状态的保存目录；有多个 tailnet 时，每个要用不同的目录
+  "state_directory": "tailscale",
+  // 在 Tailscale 管理后台显示的设备名
+  "hostname": "my-device",
+  // 接收其他设备通告的子网路由
+  "accept_routes": true
+  // 其他可用字段：control_url（自建 Headscale）、auth_key、exit_node、advertise_routes 等
+  // 详见 https://sing-box.sagernet.org/zh/configuration/endpoint/tailscale/
+}`;
+
+export function newTailnet(partial: Partial<Tailnet> = {}): Tailnet {
+  return {
+    id: uid(),
+    tag: "ts",
+    endpoint: TAILSCALE_ENDPOINT_TEMPLATE,
+    magicDns: true,
+    acceptDefaultResolvers: false,
+    dnsDomains: [],
+    routes: [],
+    asProxy: false,
+    ...partial,
+  };
+}
+
+/** Example profile for first-time visitors: two template nodes, no personal settings. */
+export function blueprintProfile(): Profile {
+  const reality = TEMPLATES.find((t) => t.id === "vless-reality")!;
+  return {
+    version: 2,
+    nodes: [newNode({ tag: "hy2-1" }), newNode({ tag: "reality-1", body: reality.body })],
+    settings: defaultSettings(),
+  };
+}

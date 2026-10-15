@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  SING_BOX_VERSION: 1.14.3
+
+jobs:
+  test:
+    name: Tests, types and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  sing-box-check:
+    name: sing-box check (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux also covers the auto_redirect config; Windows and macOS cover platform-specific init.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - name: Download sing-box ${{ env.SING_BOX_VERSION }} (checksum verified)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "SING_BOX=$(python scripts/fetch-sing-box.py "$SING_BOX_VERSION" "$RUNNER_TEMP/sing-box")" >> "$GITHUB_ENV"
+      - run: npm run check:singbox

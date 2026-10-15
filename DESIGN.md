@@ -1,0 +1,108 @@
+# 设计说明
+
+本文记录生成器背后的设计决定和理由，以及实测得出的结论。目标版本：sing-box 1.14（用到了 `evaluate`、`respond`、`race`、`speculative`、`neighbor_domain`、`http_clients`、`preferred_by` 等 1.13/1.14 才有的功能）。
+
+蓝本是作者在 SFM 中实际使用的配置（`test/fixtures/tiger-baseline.json`，已去除真实域名和密钥）。生成器先做到百分之百还原蓝本，再在此基础上重新设计 DNS 部分。
+
+## 1. 分流模式
+
+| 模式 | 直连 | 走代理 |
+|---|---|---|
+| Direct | 全部 | — |
+| GFWList（默认） | 不在 gfwlist 里的 | gfwlist 里的域名，以及 Telegram、自定义 IP 段 |
+| Non-CN | 国内域名列表（geosite-geolocation-cn）里的，或目标 IP 在国内的 | 其余 |
+| Global | — | 全部（Tailscale 和内网除外） |
+
+自定义直连域名在除 Global 以外的模式下始终直连，优先级高于 gfwlist。
+
+自定义代理域名和 IP 在除 Direct 以外的模式下始终走代理（也写入 `gfwlist-custom-domains`/`gfwlist-custom-ips`，所以 GFWList 模式原有的判断照样生效）；DNS 上按走代理处理（远程解析、只给 A）。同一个域名同时出现在两个列表里时，直连优先。
+
+## 2. DNS 策略
+
+**直连的流量只用本地 DNS**（网络下发的 DNS），不使用国内 DoH。
+- 理由：国内不存在不经代理就能拿到干净结果的 DNS，换成阿里 DNS 并不能避免污染，反而多一次查询、多一个依赖（公司或校园网可能封外部 DNS）。
+- 代价：本地 DNS 解析未缓存的国外域名偏慢（实测 500–650ms），这是在国内递归解析的固有成本。
+
+**走代理的流量经代理问远程 DNS**（默认 Google DoT，可选 Cloudflare、Quad9，DoT 或 DoH；服务器标签统一为 `remote`）。
+- 默认不发 ECS：走代理的流量，最优 CDN 节点应该靠近代理服务器，而不是用户；不带 ECS 时，Google 看到的就是代理服务器的 IP。
+
+**Non-CN 模式下，不在国内域名列表里的域名，本地 DNS 和 Google 并行查询。**
+- 本地 DNS 返回国内 IP 或内网 IP 时用本地结果（流量会直连），否则用 Google 的结果。
+- 本地 DNS 超时设为 500ms：它卡住时直接用 Google 的结果，代价只是这个域名这次走了代理。
+- 实测确认：回复会等本地 DNS 的结果判定后才发出，所以国内结果确实优先。
+
+**DNS 缓存按服务器分开存**（缓存键包含服务器名、ECS 网段，本地 DNS 还包含当前网络），模式之间不会串用结果，换网络后本地 DNS 的缓存自动作废。
+
+## 3. IPv6 策略
+
+**走代理的流量只用 IPv4**：走代理的域名，AAAA、HTTPS（type 65）、SVCB（type 64）查询一律返回空，只给 A。
+- 理由一：出口一致。IPv4 和 IPv6 不会从不同的服务器出去，避免风控严格的网站因为出口 IP 变化触发验证。
+- 理由二：TUN 下应用不会从 IPv6 回退到 IPv4。sing-box 要先在本机完成 TCP 握手才能嗅探域名，应用的 Happy Eyeballs 因此认为 IPv6 已连上；如果代理服务器没有 IPv6，连接随后被重置，应用不会再尝试 IPv4（已实测：`curl` 同时给出 IPv6 和 IPv4 地址时选了 IPv6，0.5 秒后失败）。
+- HTTPS/SVCB 也要清空，否则浏览器可以通过 `ipv6hint` 拿到 IPv6 地址。
+- 代价：走代理的网站拿不到 ECH 和 HTTP/3 提示。流量本来就在代理隧道里，ECH 意义不大；HTTP/3 仍可通过 `Alt-Svc` 升级。
+
+**应用自己发起的 IPv6 连接不拦截**（浏览器自带的安全 DNS、写死的 IP、缓存的地址），按嗅探到的域名正常分流；要走代理的，和 IPv4 一样走 `proxy`，从同一台服务器出去。当前服务器没有 IPv6 时这类连接会失败。所以建议浏览器的“安全 DNS”保持“自动”或关闭（Chrome/Edge 的自动模式不会对 TUN 的 DNS 地址升级成 DoH）。
+
+**直连流量的 IPv6 照常使用**，但本机没有公网 IPv6 时（只有 IPv4 的网络）：
+- 直连域名的 AAAA 返回空；
+- 在握手前（pre-match）拒绝直连的国内 IPv6，让应用干净地回退到 IPv4。
+
+这两条依赖 `default_interface_address`。文档写的是只支持 Linux、Windows、macOS，但：
+- 源码在拿不到网卡地址时判定为“不匹配”，而规则是反着用的，所以会按“没有 IPv6”处理，往安全的方向走（只用 IPv4，不会打不开网站）；
+- 实测 iOS（SFI）上能正确识别公网 IPv6，直连可以用上 IPv6；
+- Android 未实测。
+
+**TUN 保留 IPv6 地址和路由。** 去掉的话，Linux/Windows 上 IPv6 会被 `strict_route` 禁用，Apple/Android 上 IPv6 很可能绕过 sing-box，导致各平台行为不一致、应用自己发起的 IPv6 流量不受分流管控。
+
+**曾经的 `proxy-v6` 设计已移除**：它让 IPv6 单独选服务器，带来出口不一致，还需要手动标记哪些服务器有 IPv6。
+
+## 4. Tailscale
+
+- `preferred_by` 对 tailnet 设备和子网路由生效，并排除出口节点的 `/0` 路由（源码中 `peer.Route.Bits() > 0`），所以设置出口节点不会改变普通流量的走向。
+- **分域 DNS 是关键**：例如把公司域名 `corp.example.com` 交给该 tailnet 的 DNS 解析，才能拿到内网地址（实测：同一个内部域名，经 tailnet DNS 解析为 `192.168.x.x`，公网 DNS 给的是公网地址）。
+- **出口节点对访问子网不是必需的**：去掉 `exit_node` 后，子网里的域名解析和连接都照常（实测）。只有目标地址没有被任何子网路由覆盖时，才需要靠出口节点转发。
+- Tailscale 重启后的第一次查询可能需要 2–3 秒建立连接，属于冷启动。
+
+生成器中的 Tailscale 模块（每个 tailnet 一张卡片）：
+
+| 选项 | 生成内容 |
+|---|---|
+| 端点 JSON（可写注释） | `endpoints` 中的一项，`type` 和 `tag` 由生成器填写 |
+| MagicDNS | `<标签>-dns` 服务器 + `preferred_by` DNS 规则 |
+| 使用 tailnet 的默认 DNS | DNS 服务器上的 `accept_default_resolvers` |
+| 分域 DNS 域名 | `domain_suffix` → `<标签>-dns`，放在所有 DNS 规则最前 |
+| 额外路由 | `domain_suffix`/`ip_cidr` → 端点 |
+| 作为代理出口 | 端点加入 `proxy` 选择器（不进 `auto`，需要端点里设了 `exit_node`） |
+
+`preferred_by` 路由规则和“拒绝直连国内 IPv6”规则里对 tailnet 的排除，都由生成器自动处理。
+
+## 5. 可分享性的取舍
+
+- 核心策略只保留一套，不开放逐条编辑。规则之间相互依赖（race 规则的顺序、`speculative` 的位置等），随手改一条可能悄悄出错；需要深度定制的用户直接修改生成的 JSON。
+- 唯一开放的策略选项：走代理时使用的 DNS 服务器。
+- 支持全平台（Apple、Android、Linux、Windows）。
+- 节点用 JSON 编辑（可写注释），从协议模板开始，覆盖 1.14 可作为代理节点的全部 18 种协议：15 种出站，加上 WireGuard、OpenConnect、OpenVPN 三种端点（WireGuard 出站在 1.14 中只剩空壳，必须用端点）。
+  - 生成器只负责：填写 `tag`；`type` 为端点类型的放进 `endpoints`，其余放进 `outbounds`；没写 `domain_resolver` 时补上 `local`（节点服务器是直连访问的）；勾选“加入代理组”的节点进入 `proxy` 和 `auto`。
+  - 校验：JSON 语法、`type` 是否支持、是否缺 `server`、密钥类字段是否为空、`server` 是否还是模板示例地址、`detour` 指向的节点是否存在。
+  - 旧版用表单保存的 Hysteria2/VLESS 服务器，加载时自动转换为等价的 JSON 节点（测试验证转换后与蓝本逐字段一致）。
+  - 代价：密码等敏感字段在 JSON 编辑框里是明文显示的，截图或共享屏幕时要注意。
+- Tailscale 做成可选模块，可以有多个 tailnet（见第 4 节）。
+- 作者个人习惯的规则做成开关，默认关闭：Steam（lancache 本地解析、Non-CN 下 steamcontent 直连）、禁止 iCloud 使用 QUIC。
+- 平台选择目前只影响 TUN：Linux 上开启 `auto_redirect`。不能“全平台都写上”：源码（`protocol/tun/inbound.go`）在非 Linux 平台遇到 `auto_redirect` 会直接报错 `auto_redirect is only supported on Linux`，配置无法加载（macOS、iOS、Windows）。Android 能加载，但只做简单的 IPv4 TCP 转发，收益不明确且未实测，所以不开启。这也说明平台专属选项有的会被忽略、有的会报错，每个平台的生成结果都应该用 `sing-box check` 验证。
+- 纯前端，运行时不发出任何网络请求；设置只保存在本地浏览器，可以保存多套命名配置（例如 Mac、iPhone 各一套）。
+- 构建产物带 CSP（`vite.config.ts`）：只允许同源的脚本和样式，`connect-src 'none'` 禁止一切 fetch/XHR/WebSocket，`form-action 'none'`、`base-uri 'none'`。“不上传数据”由浏览器强制执行，而不只是承诺；即使将来引入的依赖想联网也会被拦下。开发服务器不加（热更新需要 WebSocket）。已在 `vite preview` 下验证：页面功能正常，主动发起的 fetch（包括同源）被拦截。
+
+## 6. 已知局限
+
+- GFWList 模式下，被墙但没收录进 gfwlist 的域名（例如 `intercom.io`）会拿到污染结果；即使换成干净的 IP，这类域名往往还会被 SNI 阻断，所以正确的补救办法是加入自定义代理域名列表，而不是修 DNS。sing-box 1.14 无法“按 DNS 是否被污染”来决定路由（`override_destination` 已废弃）。
+- 规则集从 `raw.githubusercontent.com` 经代理下载；代理未就绪时首次启动会等待。
+
+## 7. 测试
+
+- `test/generate.test.ts`：非 DNS 部分与蓝本逐字段比对（允许的差异逐项列出）；DNS 部分用 `test/dnswalk.ts` 按“模式 × 查询类型 × 域名类别”推演会问哪个服务器、最终怎么回答。
+- `test/normalize.ts`：抹平 SFM 重新保存配置时的写法差异（单元素数组写成字符串、省略默认值、时长写成 `24h0m0s` 等）。
+- `test/schema.test.ts`：用 1.14.3 官方 JSON schema 校验全部示例配置（schema 由 `sing-box schema` 生成，与源码中的 `docs/schema.json` 一致；大部分定义不允许未知字段，能抓到字段名拼错）。
+- CI（`.github/workflows/ci.yml`）：测试、类型检查、构建；然后在 Linux、macOS、Windows 上用官方二进制（`scripts/fetch-sing-box.py` 按发布页公布的 SHA-256 校验）跑 `sing-box check`。Linux 上会覆盖 `auto_redirect` 配置。Android 没有可用的 CI 环境，未覆盖。
+- `scripts/singbox-check.ts`（`npm run check:singbox`）：为每个节点模板、ShadowTLS 串联、各平台的“功能全开”配置、各代理 DNS 组合生成配置，逐个跑 `sing-box check`。模板里的空密码、UUID、密钥会先填上格式合法的示例值，检查的是字段结构。2026-10-15 用官方 1.14.3（darwin-arm64，SHA-256 与发布页一致）实测全部通过；Linux 配置因 `auto_redirect` 需在 Linux 上检查，去掉该项后其余部分通过。
+  - 这次检查发现：Shadowsocks 2022 系列的密码必须是对应长度的 base64 密钥，随便填会导致 sing-box 启动失败（`decode key: illegal base64 data`）。已在模板注释中说明，并在页面校验中提前报错。
+- 实际行为通过 Clash API 和 debug 日志在 SFM 中验证；`macOS` 自带的 `dig` 不认识 `HTTPS` 类型名，测试 HTTPS 记录需写成 `TYPE65`。

@@ -1,0 +1,1426 @@
+{
+  "$schema": "https://sing-box.sagernet.org/schema.json",
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "local",
+        "neighbor_domain": [
+          ".",
+          ".lan",
+          ".home.arpa"
+        ]
+      },
+      {
+        "type": "tailscale",
+        "tag": "home-dns",
+        "endpoint": "home",
+        "accept_search_domain": true
+      },
+      {
+        "type": "tailscale",
+        "tag": "work-dns",
+        "endpoint": "work",
+        "accept_default_resolvers": true,
+        "accept_search_domain": true
+      },
+      {
+        "type": "tls",
+        "tag": "google",
+        "detour": "proxy",
+        "server": "8.8.8.8",
+        "server_port": 853,
+        "tls": {
+          "enabled": true,
+          "server_name": "dns.google"
+        }
+      },
+      {
+        "type": "https",
+        "tag": "cn-dns",
+        "server": "223.5.5.5",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "server_name": "dns.alidns.com"
+        },
+        "path": "/dns-query"
+      },
+      {
+        "type": "tls",
+        "tag": "google-v6-check",
+        "detour": "proxy-v6",
+        "server": "2001:4860:4860::8888",
+        "server_port": 853,
+        "tls": {
+          "enabled": true,
+          "server_name": "dns.google"
+        }
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": "corp.example.com",
+        "server": "work-dns"
+      },
+      {
+        "preferred_by": "home-dns",
+        "server": "home-dns"
+      },
+      {
+        "preferred_by": "work-dns",
+        "server": "work-dns"
+      },
+      {
+        "preferred_by": "local",
+        "server": "local"
+      },
+      {
+        "domain": "localhost",
+        "domain_suffix": [
+          ".local",
+          ".lan",
+          ".localdomain",
+          ".home.arpa",
+          ".internal",
+          ".intranet"
+        ],
+        "server": "local"
+      },
+      {
+        "domain": "lancache.steamcontent.com",
+        "server": "local"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": [
+              "A",
+              "AAAA"
+            ]
+          },
+          {
+            "rule_set": [
+              "gfwlist",
+              "gfwlist-custom-domains"
+            ],
+            "invert": true
+          }
+        ],
+        "action": "evaluate",
+        "server": "local",
+        "timeout": "2s"
+      },
+      {
+        "match_response": true,
+        "ip_is_private": true,
+        "action": "respond"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "rule_set": "geosite-geolocation-cn",
+            "invert": true
+          },
+          {
+            "clash_mode": "GFWList",
+            "invert": true
+          }
+        ],
+        "action": "route-options",
+        "timeout": "2s"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "clash_mode": "Non-CN"
+          },
+          {
+            "rule_set": "geosite-geolocation-cn",
+            "invert": true
+          },
+          {
+            "domain_suffix": "steamcontent.com",
+            "invert": true
+          }
+        ],
+        "action": "evaluate",
+        "server": "google-v6-check",
+        "tag": "noncn-v6-check",
+        "timeout": "2s",
+        "disable_cache": true,
+        "disable_optimistic_cache": true,
+        "client_subnet": "115.195.41.0/24"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "rule_set": [
+              "gfwlist",
+              "gfwlist-custom-domains"
+            ],
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "GFWList"
+              },
+              {
+                "rule_set": "geosite-geolocation-cn"
+              },
+              {
+                "query_type": [
+                  "A",
+                  "AAAA"
+                ]
+              }
+            ]
+          }
+        ],
+        "action": "evaluate",
+        "server": "cn-dns",
+        "tag": "cn-answer"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "default_interface_address": "2000::/3",
+            "invert": true
+          },
+          {
+            "match_response": "cn-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "cn-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "cn-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "cn-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "GFWList",
+                "match_response": "cn-answer"
+              },
+              {
+                "rule_set": "geosite-geolocation-cn",
+                "match_response": "cn-answer"
+              },
+              {
+                "rule_set": "geoip-cn",
+                "match_response": "cn-answer",
+                "response_rcode": "NOERROR"
+              }
+            ]
+          }
+        ],
+        "action": "predefined",
+        "race": true,
+        "rcode": "NOERROR"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "match_response": "cn-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "cn-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "cn-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "cn-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "GFWList",
+                "match_response": "cn-answer"
+              },
+              {
+                "rule_set": "geosite-geolocation-cn",
+                "match_response": "cn-answer"
+              },
+              {
+                "rule_set": "geoip-cn",
+                "match_response": "cn-answer"
+              }
+            ]
+          }
+        ],
+        "action": "evaluate",
+        "server": "google-v6-check",
+        "tag": "cn-answer-v6-check",
+        "timeout": "2s",
+        "disable_cache": true,
+        "disable_optimistic_cache": true,
+        "client_subnet": "115.195.41.0/24"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "match_response": "cn-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "cn-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "cn-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "cn-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "GFWList",
+                "match_response": "cn-answer"
+              },
+              {
+                "rule_set": "geosite-geolocation-cn",
+                "match_response": "cn-answer"
+              },
+              {
+                "rule_set": "geoip-cn",
+                "match_response": "cn-answer"
+              }
+            ]
+          },
+          {
+            "match_response": "cn-answer-v6-check",
+            "response_rcode": "NOERROR",
+            "invert": true
+          }
+        ],
+        "action": "predefined",
+        "rcode": "NOERROR"
+      },
+      {
+        "clash_mode": "GFWList",
+        "match_response": "cn-answer",
+        "action": "respond",
+        "race": true
+      },
+      {
+        "rule_set": "geosite-geolocation-cn",
+        "match_response": "cn-answer",
+        "action": "respond",
+        "race": true
+      },
+      {
+        "rule_set": "geoip-cn",
+        "match_response": "cn-answer",
+        "response_rcode": "NOERROR",
+        "action": "respond",
+        "race": true
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Global"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "action": "evaluate",
+        "server": "google-v6-check",
+        "tag": "proxy-aaaa-answer",
+        "timeout": "2s",
+        "disable_cache": true,
+        "disable_optimistic_cache": true,
+        "client_subnet": "115.195.41.0/24"
+      },
+      {
+        "match_response": "proxy-aaaa-answer",
+        "response_rcode": "NOERROR",
+        "action": "respond"
+      },
+      {
+        "match_response": "proxy-aaaa-answer",
+        "response_rcode": "NXDOMAIN",
+        "action": "respond"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Global"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "action": "predefined",
+        "rcode": "NOERROR"
+      },
+      {
+        "type": "logical",
+        "mode": "or",
+        "rules": [
+          {
+            "rule_set": [
+              "gfwlist",
+              "gfwlist-custom-domains"
+            ]
+          },
+          {
+            "type": "logical",
+            "mode": "and",
+            "rules": [
+              {
+                "clash_mode": "GFWList",
+                "invert": true
+              },
+              {
+                "rule_set": "geosite-geolocation-cn",
+                "invert": true
+              }
+            ]
+          }
+        ],
+        "action": "evaluate",
+        "server": "google",
+        "tag": "remote-answer",
+        "speculative": true,
+        "timeout": "10s",
+        "client_subnet": "115.195.41.0/24"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "default_interface_address": "2000::/3",
+            "invert": true
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "remote-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "remote-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "action": "predefined",
+        "rcode": "NOERROR"
+      },
+      {
+        "query_type": "AAAA",
+        "clash_mode": "Non-CN",
+        "match_response": "remote-answer",
+        "ip_is_private": true,
+        "action": "respond"
+      },
+      {
+        "query_type": "AAAA",
+        "clash_mode": "Non-CN",
+        "rule_set": "geoip-cn",
+        "match_response": "remote-answer",
+        "response_rcode": "NOERROR",
+        "action": "respond"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "clash_mode": "Non-CN",
+            "invert": true
+          },
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "remote-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "remote-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "invert": true
+          }
+        ],
+        "action": "evaluate",
+        "server": "google-v6-check",
+        "tag": "remote-answer-v6-check",
+        "timeout": "2s",
+        "disable_cache": true,
+        "disable_optimistic_cache": true,
+        "client_subnet": "115.195.41.0/24"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "clash_mode": "Non-CN"
+          },
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "remote-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "remote-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "invert": true
+          },
+          {
+            "match_response": "noncn-v6-check",
+            "response_rcode": "NOERROR",
+            "invert": true
+          }
+        ],
+        "action": "predefined",
+        "rcode": "NOERROR"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "clash_mode": "Non-CN",
+            "invert": true
+          },
+          {
+            "query_type": "AAAA"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_cidr": "2000::/3",
+            "response_rcode": "NOERROR"
+          },
+          {
+            "match_response": "remote-answer",
+            "ip_is_private": true,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Direct"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains"
+                    ],
+                    "invert": true
+                  },
+                  {
+                    "rule_set": [
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "match_response": "remote-answer",
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "Non-CN"
+                  },
+                  {
+                    "type": "logical",
+                    "mode": "or",
+                    "rules": [
+                      {
+                        "rule_set": "geosite-geolocation-cn"
+                      },
+                      {
+                        "domain_suffix": "steamcontent.com"
+                      },
+                      {
+                        "rule_set": "geoip-cn",
+                        "match_response": "remote-answer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "invert": true
+          },
+          {
+            "match_response": "remote-answer-v6-check",
+            "response_rcode": "NOERROR",
+            "invert": true
+          }
+        ],
+        "action": "predefined",
+        "rcode": "NOERROR"
+      },
+      {
+        "match_response": "remote-answer",
+        "action": "respond"
+      },
+      {
+        "action": "predefined",
+        "rcode": "SERVFAIL"
+      }
+    ],
+    "final": "google",
+    "reverse_mapping": true
+  },
+  "http_clients": [
+    {
+      "tag": "rule-set-download",
+      "version": 2,
+      "detour": "proxy"
+    }
+  ],
+  "endpoints": [
+    {
+      "type": "tailscale",
+      "tag": "home",
+      "state_directory": "tailscale-main",
+      "hostname": "my-mac",
+      "accept_routes": true
+    },
+    {
+      "type": "tailscale",
+      "tag": "work",
+      "state_directory": "tailscale-secondary",
+      "hostname": "my-mac-2",
+      "accept_routes": true,
+      "exit_node": "office-gw",
+      "exit_node_allow_lan_access": true
+    }
+  ],
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": [
+        "172.19.0.1/30",
+        "fdfe:dcba:9876::1/126"
+      ],
+      "auto_route": true,
+      "strict_route": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "outbounds": [
+        "auto",
+        "us-la-99-hy2",
+        "us-la-99-vless",
+        "us-la3-zgo-hy2",
+        "us-la3-zgo-vless"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "us-la-99-hy2",
+        "us-la-99-vless",
+        "us-la3-zgo-hy2",
+        "us-la3-zgo-vless"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "3m0s",
+      "tolerance": 50,
+      "idle_timeout": "30m0s"
+    },
+    {
+      "type": "urltest",
+      "tag": "proxy-v6",
+      "outbounds": [
+        "us-la-99-hy2",
+        "us-la-99-vless"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "3m0s",
+      "tolerance": 50,
+      "idle_timeout": "30m0s"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "us-la-99-hy2",
+      "domain_resolver": "cn-dns",
+      "server": "us-la-99.example.com",
+      "server_port": 0,
+      "server_ports": "20000:50000",
+      "hop_interval": "30s",
+      "up_mbps": 50,
+      "down_mbps": 300,
+      "password": "",
+      "tls": {
+        "enabled": true,
+        "server_name": "us-la-99.example.com"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "us-la-99-vless",
+      "domain_resolver": "cn-dns",
+      "server": "us-la-99.example.com",
+      "server_port": 443,
+      "uuid": "",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "us-la-99.example.com",
+        "alpn": [
+          "h2",
+          "http/1.1"
+        ]
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "us-la3-zgo-hy2",
+      "domain_resolver": "cn-dns",
+      "server": "us-la3-zgo.example.com",
+      "server_port": 0,
+      "server_ports": "20000:50000",
+      "hop_interval": "30s",
+      "up_mbps": 50,
+      "down_mbps": 300,
+      "password": "",
+      "tls": {
+        "enabled": true,
+        "server_name": "us-la3-zgo.example.com"
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "us-la3-zgo-vless",
+      "domain_resolver": "cn-dns",
+      "server": "us-la3-zgo.example.com",
+      "server_port": 443,
+      "uuid": "",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "us-la3-zgo.example.com",
+        "alpn": [
+          "h2",
+          "http/1.1"
+        ]
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "ip_version": 6,
+            "network": [
+              "tcp",
+              "udp"
+            ],
+            "ip_cidr": "2000::/3"
+          },
+          {
+            "rule_set": "geoip-cn"
+          },
+          {
+            "default_interface_address": "2000::/3",
+            "invert": true
+          },
+          {
+            "preferred_by": [
+              "home",
+              "work"
+            ],
+            "invert": true
+          },
+          {
+            "port": 53,
+            "invert": true
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "clash_mode": "Non-CN"
+              },
+              {
+                "type": "logical",
+                "mode": "and",
+                "rules": [
+                  {
+                    "clash_mode": "GFWList"
+                  },
+                  {
+                    "rule_set": [
+                      "gfwlist",
+                      "gfwlist-custom-domains",
+                      "telegram-ip",
+                      "gfwlist-custom-ips"
+                    ],
+                    "invert": true
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "action": "sniff"
+      },
+      {
+        "type": "logical",
+        "mode": "or",
+        "rules": [
+          {
+            "protocol": "dns"
+          },
+          {
+            "port": 53
+          }
+        ],
+        "action": "hijack-dns"
+      },
+      {
+        "network": "udp",
+        "domain": "gateway.icloud.com",
+        "port": 443,
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "preferred_by": "home",
+        "outbound": "home"
+      },
+      {
+        "preferred_by": "work",
+        "outbound": "work"
+      },
+      {
+        "domain": "localhost",
+        "domain_suffix": [
+          ".local",
+          ".lan",
+          ".localdomain",
+          ".home.arpa",
+          ".internal",
+          ".intranet"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "clash_mode": "Direct",
+        "outbound": "direct"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "clash_mode": "GFWList"
+          },
+          {
+            "rule_set": [
+              "gfwlist",
+              "gfwlist-custom-domains",
+              "telegram-ip",
+              "gfwlist-custom-ips"
+            ],
+            "invert": true
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "clash_mode": "Non-CN"
+          },
+          {
+            "type": "logical",
+            "mode": "or",
+            "rules": [
+              {
+                "rule_set": "geosite-geolocation-cn"
+              },
+              {
+                "domain_suffix": "steamcontent.com"
+              },
+              {
+                "ip_is_private": true
+              },
+              {
+                "rule_set": "geoip-cn"
+              }
+            ]
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "ip_cidr": "::/0"
+          },
+          {
+            "ip_cidr": "0.0.0.0/0",
+            "invert": true
+          }
+        ],
+        "outbound": "proxy-v6"
+      },
+      {
+        "clash_mode": "Global",
+        "outbound": "proxy"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "geoip-cn",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "geosite-geolocation-cn",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "gfwlist",
+        "url": "https://raw.githubusercontent.com/Dreista/sing-box-rule-set-cn/rule-set/gfwlist.txt.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "tag": "telegram-ip",
+        "rules": [
+          {
+            "ip_cidr": [
+              "91.105.192.0/23",
+              "91.108.4.0/22",
+              "91.108.8.0/21",
+              "91.108.16.0/21",
+              "91.108.36.0/22",
+              "91.108.56.0/22",
+              "95.161.64.0/20",
+              "95.161.80.0/24",
+              "95.161.84.0/22",
+              "149.154.160.0/20",
+              "185.76.151.0/24",
+              "2001:b28:f23d::/48",
+              "2001:b28:f23f::/48",
+              "2001:67c:4e8::/48",
+              "2001:b28:f23c::/48",
+              "2a0a:f280::/32"
+            ]
+          }
+        ]
+      },
+      {
+        "tag": "gfwlist-custom-domains",
+        "rules": [
+          {
+            "domain_regex": "a^"
+          }
+        ]
+      },
+      {
+        "tag": "gfwlist-custom-ips",
+        "rules": [
+          {
+            "domain_regex": "a^"
+          }
+        ]
+      }
+    ],
+    "final": "proxy",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local",
+    "default_http_client": "rule-set-download"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true
+    },
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "secret": "",
+      "default_mode": "GFWList"
+    }
+  }
+}

@@ -1,0 +1,94 @@
+// Sample profiles covering every node template and feature/platform combination.
+// Template placeholders are filled with well-formed values so checks exercise field structure.
+// Shared by the schema test and scripts/gen-check-configs.ts (`sing-box check`).
+import { parseJsonc } from "../src/generate";
+import { blueprintProfile, newNode, newTailnet } from "../src/defaults";
+import { TEMPLATES } from "../src/templates";
+import type { Profile } from "../src/types";
+
+const DUMMY: Record<string, string> = {
+  password: "dummy-pass",
+  uuid: "bf000d23-0752-40b4-affe-68f7707a9661",
+  psk: "dummy-psk",
+  auth_str: "dummy",
+  username: "user",
+  private_key: "YNXtAzepDqRv9H52osJVDQnznT5AM11eCK3ESpwSt04=",
+  short_id: "0123456789abcdef",
+};
+
+function fill(v: any, key = "", parent = ""): any {
+  if (Array.isArray(v)) return v.map((x) => fill(x, key, parent));
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, k, key)]));
+  if (v !== "") return v;
+  if (key === "public_key") {
+    return parent === "reality" ? "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0" : "Z1XXLsKYkYxuiYjJIkRvtIKFepCYHTgON+GwPq7SOV4=";
+  }
+  return DUMMY[key] ?? v;
+}
+
+/** A template body with placeholders filled. Shadowsocks 2022 needs a base64 key of the cipher's size. */
+export function filledBody(templateId: string, extra: object = {}): string {
+  const o = fill(parseJsonc(TEMPLATES.find((t) => t.id === templateId)!.body));
+  if (o.type === "shadowsocks" && String(o.method).startsWith("2022-")) {
+    o.password = String(o.method).includes("128") ? "UPFTpZE0Gb2XVeTW9VNioQ==" : "fuQQqj0+RRUmmQ/to1EvkWkzyEU7m4ZS40+qiz2zmfQ=";
+  }
+  return JSON.stringify({ ...o, ...extra });
+}
+
+/** Everything switched on: all templates (but Tor), two tailnets, both lists, ECS, optional rules. */
+function fullProfile(): Profile {
+  const p = blueprintProfile();
+  p.nodes = TEMPLATES.filter((t) => t.id !== "tor").map((t, i) => newNode({ tag: `${t.tagPrefix}-${i}`, body: filledBody(t.id) }));
+  Object.assign(p.settings, {
+    steam: true,
+    blockIcloudQuic: true,
+    clientSubnet: "203.0.113.0/24",
+    clashSecret: "s",
+    directDomains: ["example.cn"],
+    proxyRules: ["intercom.io", "203.0.113.0/24", "2001:db8::/32"],
+    tailnets: [
+      newTailnet({ tag: "home", endpoint: '{"state_directory":"ts-home","hostname":"a","accept_routes":true}' }),
+      newTailnet({
+        tag: "work",
+        endpoint: '{"state_directory":"ts-work","hostname":"b","accept_routes":true,"exit_node":"gw"}',
+        acceptDefaultResolvers: true,
+        dnsDomains: ["corp.example.com"],
+        routes: ["10.20.0.0/16", "nas.example.com"],
+        asProxy: true,
+      }),
+    ],
+  });
+  return p;
+}
+
+export function sampleProfiles(): { name: string; profile: Profile }[] {
+  const samples: { name: string; profile: Profile }[] = [{ name: "default", profile: blueprintProfile() }];
+  for (const t of TEMPLATES) {
+    const p = blueprintProfile();
+    p.nodes = [newNode({ tag: t.tagPrefix, body: filledBody(t.id) })];
+    samples.push({ name: `tpl-${t.id}`, profile: p });
+  }
+  {
+    // ShadowTLS is meant to be chained: Shadowsocks with detour to it.
+    const p = blueprintProfile();
+    p.nodes = [
+      newNode({ tag: "st", body: filledBody("shadowtls"), inGroups: false }),
+      newNode({ tag: "ss", body: filledBody("shadowsocks", { detour: "st" }) }),
+    ];
+    samples.push({ name: "combo-ss-shadowtls", profile: p });
+  }
+  for (const platform of ["apple", "android", "windows", "linux"] as const) {
+    const p = fullProfile();
+    p.settings.platform = platform;
+    samples.push({ name: `full-${platform}`, profile: p });
+  }
+  for (const provider of ["google", "cloudflare", "quad9"] as const) {
+    for (const protocol of ["tls", "https"] as const) {
+      const p = blueprintProfile();
+      p.nodes = [newNode({ tag: "hy2", body: filledBody("hysteria2") })];
+      p.settings.remoteDns = { provider, protocol };
+      samples.push({ name: `dns-${provider}-${protocol}`, profile: p });
+    }
+  }
+  return samples;
+}
