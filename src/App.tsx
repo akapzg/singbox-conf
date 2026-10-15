@@ -1170,6 +1170,7 @@ export default function App() {
   const statusTone = errors.length ? "error" : warnings.length ? "warning" : "ok";
   const statusText = errors.length ? `${errors.length} 个错误` : warnings.length ? `${warnings.length} 条提醒` : "配置完整";
   const StatusIcon = errors.length ? CircleAlert : warnings.length ? TriangleAlert : CircleCheck;
+  const configStats = `${configText.split("\n").length} 行 · ${(new Blob([configText]).size / 1024).toFixed(1)} KB`;
   const copyConfig = async () => setToast((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择");
 
   const manageMenu = (
@@ -1254,7 +1255,7 @@ export default function App() {
   return (
     <div className="min-h-svh bg-background text-foreground">
       <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
+        <div className="mx-auto flex max-w-3xl flex-wrap lg:max-w-[1400px] items-center gap-x-3 gap-y-2 px-4 py-2.5">
           <div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto sm:flex-1">
             <Boxes className="size-5 shrink-0 text-primary" aria-hidden />
             <h1 className="mr-auto truncate text-sm font-semibold">
@@ -1284,7 +1285,7 @@ export default function App() {
               <StatusIcon />
               {statusText}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setPreview(true)}>
+            <Button variant="outline" size="sm" className="lg:hidden" onClick={() => setPreview(true)}>
               <Eye />
               预览
             </Button>
@@ -1311,9 +1312,10 @@ export default function App() {
         }}
       />
 
-      <main className="mx-auto max-w-5xl px-4 pt-1 pb-16">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-4">
-          <div className="-mx-4 overflow-x-auto border-b px-4 [scrollbar-width:none]">
+      {/* Settings on the left; on wide screens the generated config stays visible on the right. */}
+      <main className="mx-auto grid max-w-3xl items-start lg:max-w-[1400px] gap-6 px-4 pt-1 pb-16 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4">
+          <div className="-mx-4 overflow-x-auto border-b px-4 [scrollbar-width:none] lg:mx-0 lg:px-0">
             <TabsList variant="line" className="h-10" aria-label="设置分类">
               {TABS.map((t) => {
                 const state = tabState(t.id);
@@ -1444,6 +1446,16 @@ export default function App() {
             {tab === "settings" && <SettingsCard settings={profile.settings} onChange={setSettings} />}
           </section>
         </Tabs>
+
+        <aside className="sticky top-16 mt-3 hidden h-[calc(100svh-5rem)] min-w-0 flex-col overflow-hidden rounded-lg ring-1 ring-foreground/10 lg:flex" aria-label="生成的配置">
+          <div className="flex items-baseline justify-between gap-3 border-b bg-card px-3 py-2">
+            <span className="font-mono text-xs font-medium">config.json</span>
+            <span className="text-xs text-muted-foreground">{configStats}</span>
+          </div>
+          <pre className="code min-h-0 flex-1 overflow-auto" tabIndex={0} aria-label="生成的 config.json">
+            {highlighted}
+          </pre>
+        </aside>
       </main>
 
       <Sheet open={showIssues} onOpenChange={setShowIssues}>
@@ -1489,9 +1501,7 @@ export default function App() {
         <SheetContent side="right" className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
           <SheetHeader className="border-b">
             <SheetTitle className="font-mono">config.json</SheetTitle>
-            <SheetDescription>
-              {configText.split("\n").length} 行 · {(new Blob([configText]).size / 1024).toFixed(1)} KB
-            </SheetDescription>
+            <SheetDescription>{configStats}</SheetDescription>
             <div className="flex gap-1.5 pt-1">
               <Button variant="outline" size="sm" onClick={copyConfig}>
                 <Copy />
