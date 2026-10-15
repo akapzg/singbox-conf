@@ -102,7 +102,7 @@
 - `test/generate.test.ts`：非 DNS 部分与蓝本逐字段比对（允许的差异逐项列出）；DNS 部分用 `test/dnswalk.ts` 按“模式 × 查询类型 × 域名类别”推演会问哪个服务器、最终怎么回答。
 - `test/normalize.ts`：抹平 SFM 重新保存配置时的写法差异（单元素数组写成字符串、省略默认值、时长写成 `24h0m0s` 等）。
 - `test/schema.test.ts`：用 1.14.3 官方 JSON schema 校验全部示例配置（schema 由 `sing-box schema` 生成，与源码中的 `docs/schema.json` 一致；大部分定义不允许未知字段，能抓到字段名拼错）。
-- CI（`.github/workflows/ci.yml`）：测试、类型检查、构建；然后在 Linux、macOS、Windows 上用官方二进制（`scripts/fetch-sing-box.py` 按发布页公布的 SHA-256 校验）跑 `sing-box check`。Linux 上会覆盖 `auto_redirect` 配置。Android 没有可用的 CI 环境，未覆盖。
+- CI（`.github/workflows/ci.yml`）：测试、类型检查、构建；然后在 Linux、macOS、Windows 上用官方二进制（`scripts/fetch-sing-box.py` 按发布页公布的 SHA-256 校验）跑 `sing-box check`。Linux 上会覆盖 `auto_redirect` 配置。Android 没有可用的 CI 环境，未覆盖。首次运行（2026-10-15）三个平台全部通过：Linux 30 份通过（含 `full-linux`，`auto_redirect` 被正常接受）、macOS 和 Windows 各 29 份通过。
 - `scripts/singbox-check.ts`（`npm run check:singbox`）：为每个节点模板、ShadowTLS 串联、各平台的“功能全开”配置、各代理 DNS 组合生成配置，逐个跑 `sing-box check`。模板里的空密码、UUID、密钥会先填上格式合法的示例值，检查的是字段结构。2026-10-15 用官方 1.14.3（darwin-arm64，SHA-256 与发布页一致）实测全部通过；Linux 配置因 `auto_redirect` 需在 Linux 上检查，去掉该项后其余部分通过。
   - 这次检查发现：Shadowsocks 2022 系列的密码必须是对应长度的 base64 密钥，随便填会导致 sing-box 启动失败（`decode key: illegal base64 data`）。已在模板注释中说明，并在页面校验中提前报错。
 - 实际行为通过 Clash API 和 debug 日志在 SFM 中验证；`macOS` 自带的 `dig` 不认识 `HTTPS` 类型名，测试 HTTPS 记录需写成 `TYPE65`。
