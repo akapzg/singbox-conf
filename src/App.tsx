@@ -487,7 +487,7 @@ function MemberPicker(props: { id?: string; candidates: Candidate[]; selected: s
           <li
             key={c.id}
             ref={sort.rowRef(c.id)}
-            className={cn("flex items-center rounded-md", sort.dragging === c.id ? "bg-accent shadow-sm" : "hover:bg-muted/60")}
+            className={cn("flex items-center rounded-md", sort.dragging === c.id ? "relative z-10 bg-accent shadow-md ring-1 ring-ring/40" : "hover:bg-muted/60")}
           >
             <DragHandle label={c.tag} {...sort.handleProps(c.id)} />
             {row(c, true)}
