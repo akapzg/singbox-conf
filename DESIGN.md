@@ -97,7 +97,7 @@
 - 作者个人习惯的规则做成开关，默认关闭：Steam（lancache 本地解析、Non-CN 下 steamcontent 直连）、禁止 iCloud 使用 QUIC。
 - 平台选择目前只影响 TUN：Linux 上开启 `auto_redirect`。不能“全平台都写上”：源码（`protocol/tun/inbound.go`）在非 Linux 平台遇到 `auto_redirect` 会直接报错 `auto_redirect is only supported on Linux`，配置无法加载（macOS、iOS、Windows）。Android 能加载，但只做简单的 IPv4 TCP 转发，收益不明确且未实测，所以不开启。这也说明平台专属选项有的会被忽略、有的会报错，每个平台的生成结果都应该用 `sing-box check` 验证。
 - 纯前端，运行时不发出任何网络请求；设置只保存在本地浏览器，可以保存多套命名配置（例如 Mac、iPhone 各一套）。
-- 构建产物带 CSP（`vite.config.ts`）：只允许同源的脚本和样式，`connect-src 'none'` 禁止一切 fetch/XHR/WebSocket，`form-action 'none'`、`base-uri 'none'`。“不上传数据”由浏览器强制执行，而不只是承诺；即使将来引入的依赖想联网也会被拦下。开发服务器不加（热更新需要 WebSocket）。已在 `vite preview` 下验证：页面功能正常，主动发起的 fetch（包括同源）被拦截。
+- 构建产物带 CSP（`vite.config.ts`）：只允许同源的脚本、样式和字体，`connect-src 'none'` 禁止一切 fetch/XHR/WebSocket，`form-action 'none'`、`base-uri 'none'`。样式允许内联（`'unsafe-inline'`）：Base UI 和 CodeMirror 会设置内联样式；而数据外带的通道（图片、字体、请求）都只限同源或被禁止，React 也没有 HTML 注入点，所以 CSS 注入无从利用。“不上传数据”由浏览器强制执行，而不只是承诺；即使将来引入的依赖想联网也会被拦下。开发服务器不加（热更新需要 WebSocket）。已在 `vite preview` 下验证：页面功能正常，主动发起的 fetch（包括同源）被拦截。
 
 ## 6. 代理组
 
