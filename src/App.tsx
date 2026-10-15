@@ -712,6 +712,11 @@ function GettingStarted(props: { onImport: () => void }) {
   );
 }
 
+/** Divides a long card into parts. */
+function SubHeading(props: { children: ReactNode }) {
+  return <h3 className="-mb-1 border-t pt-4 text-xs font-medium text-muted-foreground">{props.children}</h3>;
+}
+
 function SectionHead(props: { description: ReactNode; children: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -827,6 +832,7 @@ function TailnetCard(props: {
       <FormField hintAbove label="端点配置" hint="sing-box tailscale 端点 JSON，可写注释；type 和 tag 由生成器填写">
         {(id) => <CodeEditor labelledBy={`${id}-label`} value={t.endpoint} onChange={(endpoint) => set({ endpoint })} maxLines={16} />}
       </FormField>
+      <SubHeading>DNS</SubHeading>
       <ToggleRow
         checked={t.magicDns}
         onChange={(magicDns) => set({ magicDns })}
@@ -851,6 +857,7 @@ function TailnetCard(props: {
           />
         )}
       </FormField>
+      <SubHeading>路由</SubHeading>
       <FormField hintAbove label="额外路由" hint="走这个 tailnet 的域名或 IP 段；tailnet 设备和已批准的子网路由会自动识别，不用填">
         {(id) => (
           <ListEditor
@@ -1507,7 +1514,7 @@ export default function App() {
                     添加 tailnet
                   </Button>
                 </SectionHead>
-                {tailnets.length === 0 && <Empty>未使用 Tailscale。</Empty>}
+                {tailnets.length === 0 && <Empty>还没有 tailnet。需要从这台设备访问家里或公司 tailnet 里的设备、子网时再添加。</Empty>}
                 {tailnets.map((t, i) => (
                   <TailnetCard
                     key={t.id}
@@ -1555,7 +1562,8 @@ export default function App() {
             </SheetDescription>
           </SheetHeader>
           <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
-            {TABS.map((t) => {
+            {/* Tabs with errors first. */}
+            {[...TABS].sort((a, b) => Number(tabState(b.id) === "error") - Number(tabState(a.id) === "error")).map((t) => {
               const list = [...errors, ...warnings].filter((i) => i.section === t.id);
               if (!list.length) return null;
               return (

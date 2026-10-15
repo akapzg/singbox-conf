@@ -275,6 +275,23 @@ describe("proxy groups", () => {
     expect(msgs).toContain("测速间隔「five」格式不对");
     expect(msgs).toContain("容差必须是非负整数");
     expect(validate(p).find((i) => i.message.includes("「a」"))?.section).toBe("groups");
+    expect(validate(p).find((i) => i.message.includes("「a」"))?.level).toBe("warning");
+  });
+
+  it("leaves out groups without usable members instead of breaking the config", () => {
+    const { p, hy2 } = setup();
+    const empty = newGroup({ tag: "empty" });
+    const outer = newGroup({ tag: "outer", members: [empty.id] });
+    const real = newGroup({ tag: "real", members: [empty.id, hy2.id] });
+    p.groups = [empty, outer, real];
+    p.settings.proxyDefault = empty.id;
+    const out = byTag(gen(p));
+    expect(out.empty).toBeUndefined();
+    expect(out.outer).toBeUndefined();
+    expect(out.real.outbounds).toEqual(["hy2-1"]);
+    expect(out.proxy.outbounds).not.toContain("empty");
+    expect(out.proxy.default).toBe("auto");
+    expect(validate(p).find((i) => i.message.includes("「outer」"))?.detail).toBe("成员里只有空的代理组，暂不写入配置");
   });
 });
 

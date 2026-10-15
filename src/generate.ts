@@ -442,8 +442,29 @@ export function memberTags(profile: Profile, nodes: BuiltNode[]): Map<string, st
   const tags = new Map<string, string>();
   for (const x of nodes) tags.set(x.node.id, x.node.tag);
   for (const t of profile.settings.tailnets) if (tailnetEndpoint(t).endpoint) tags.set(t.id, t.tag);
-  for (const g of profile.groups) tags.set(g.id, g.tag);
+  const usable = usableGroups(profile.groups, new Set(tags.keys()));
+  for (const g of profile.groups) if (usable.has(g.id)) tags.set(g.id, g.tag);
   return tags;
+}
+
+/**
+ * Groups that end up with at least one member: a node or tailnet in `outboundIds`, or another
+ * usable group. The rest (just added, or only holding empty groups) are left out of the config
+ * rather than breaking it, since sing-box refuses an empty group.
+ */
+export function usableGroups(groups: ProxyGroup[], outboundIds: Set<string>): Set<string> {
+  const usable = new Set<string>();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const g of groups) {
+      if (usable.has(g.id)) continue;
+      if (g.members.some((m) => m !== g.id && (outboundIds.has(m) || usable.has(m)))) {
+        usable.add(g.id);
+        changed = true;
+      }
+    }
+  }
+  return usable;
 }
 
 /** A user group as an outbound; members that no longer exist are left out. */
@@ -473,8 +494,8 @@ function outbounds(profile: Profile, nodes: BuiltNode[]): Json[] {
   const grouped = nodes.filter((x) => x.node.inGroups).map((x) => x.node.tag);
   const viaTailnet = s.tailnets.filter((t) => t.asProxy).map((t) => t.tag);
   const tags = memberTags(profile, nodes);
-  const groups = profile.groups.map((g) => groupOutbound(g, tags));
-  const proxyDefault = s.proxyDefault !== "auto" && profile.groups.some((g) => g.id === s.proxyDefault) ? tags.get(s.proxyDefault)! : "auto";
+  const groups = profile.groups.filter((g) => tags.has(g.id)).map((g) => groupOutbound(g, tags));
+  const proxyDefault = s.proxyDefault !== "auto" && tags.has(s.proxyDefault) ? tags.get(s.proxyDefault)! : "auto";
   return [
     {
       type: "selector",
@@ -650,13 +671,14 @@ export function validate(profile: Profile): Issue[] {
     if (routes.invalid.length) err(at, `额外路由格式不正确：${routes.invalid.join("、")}`);
   }
   const groupIds = new Set(profile.groups.map((g) => g.id));
-  const knownIds = new Set([...profile.nodes.map((n) => n.id), ...s.tailnets.map((t) => t.id), ...groupIds]);
+  const usable = usableGroups(profile.groups, new Set([...profile.nodes.map((n) => n.id), ...s.tailnets.map((t) => t.id)]));
   for (const g of profile.groups) {
     const at: Where = { section: "groups", id: g.id, label: `代理组「${g.tag || "(未命名)"}」` };
     if (!TAG_RE.test(g.tag)) err(at, "名称只能包含字母、数字、. _ -");
     addTag(g.tag);
-    const members = g.members.filter((id) => knownIds.has(id) && id !== g.id);
-    if (!members.length) err(at, "还没有成员，sing-box 会拒绝空的代理组");
+    if (!usable.has(g.id)) {
+      warn(at, g.members.some((m) => m !== g.id && groupIds.has(m)) ? "成员里只有空的代理组，暂不写入配置" : "还没有成员，暂不写入配置");
+    }
     if (g.type === "urltest") {
       if (g.interval.trim() && !/^\d+(ms|s|m|h)$/.test(g.interval.trim())) err(at, `测速间隔「${g.interval}」格式不对，例如 3m、30s`);
       if (g.tolerance !== null && (!Number.isInteger(g.tolerance) || g.tolerance < 0)) err(at, "容差必须是非负整数（毫秒）");
