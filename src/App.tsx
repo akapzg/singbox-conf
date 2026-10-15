@@ -166,16 +166,16 @@ function Secret(props: { id?: string; value: string; onChange: (v: string) => vo
 
 function IssueList(props: { issues: Issue[] }) {
   if (!props.issues.length) return null;
+  const hasError = props.issues.some((i) => i.level === "error");
   return (
-    <ul className="flex flex-col gap-1">
+    <ul
+      className={cn(
+        "flex flex-col gap-1 rounded-md px-3 py-2 text-xs/relaxed",
+        hasError ? "bg-destructive/[0.07]" : "bg-amber-500/[0.08]",
+      )}
+    >
       {props.issues.map((i, k) => (
-        <li
-          key={k}
-          className={cn(
-            "flex items-start gap-2 rounded-md px-2.5 py-1.5 text-xs/relaxed",
-            i.level === "error" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-800 dark:text-amber-300",
-          )}
-        >
+        <li key={k} className={cn("flex items-start gap-2", i.level === "error" ? "text-destructive" : "text-amber-800 dark:text-amber-300")}>
           {i.level === "error" ? <CircleAlert className="mt-0.5 size-3.5 shrink-0" /> : <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />}
           {i.detail}
         </li>
@@ -1554,30 +1554,41 @@ export default function App() {
                   : "没有发现问题，可以导入客户端。"}
             </SheetDescription>
           </SheetHeader>
-          <ul className="flex flex-col gap-1 overflow-y-auto px-4 pb-4">
-            {[...errors, ...warnings].map((i, k) => (
-              <li key={k}>
-                <button
-                  type="button"
-                  className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs/relaxed hover:bg-muted"
-                  onClick={() => {
-                    setShowIssues(false);
-                    goTo(i);
-                  }}
-                >
-                  {i.level === "error" ? (
-                    <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-                  ) : (
-                    <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                  )}
-                  <span>
-                    {i.message}
-                    <span className="ml-1.5 text-muted-foreground">{TABS.find((t) => t.id === i.section)?.label}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+            {TABS.map((t) => {
+              const list = [...errors, ...warnings].filter((i) => i.section === t.id);
+              if (!list.length) return null;
+              return (
+                <section key={t.id} className="flex flex-col gap-1">
+                  <h3 className="px-2 text-xs font-medium text-muted-foreground">
+                    {t.label} · {list.length}
+                  </h3>
+                  <ul className="flex flex-col">
+                    {list.map((i, k) => (
+                      <li key={k}>
+                        <button
+                          type="button"
+                          className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs/relaxed hover:bg-muted"
+                          onClick={() => {
+                            setShowIssues(false);
+                            goTo(i);
+                          }}
+                        >
+                          {i.level === "error" ? (
+                            <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+                          ) : (
+                            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                          )}
+                          <span className="flex-1">{i.message}</span>
+                          <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
         </SheetContent>
       </Sheet>
 
