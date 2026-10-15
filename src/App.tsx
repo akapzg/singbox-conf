@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type 
 import type { Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
-import { freshTag, newGroup, newNode, newTailnet } from "./defaults";
+import { freshTag, newGroup, newNode, newTailnet, randomSecret } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
@@ -22,6 +22,7 @@ import {
   FileUp,
   GripVertical,
   Pencil,
+  RefreshCw,
   Plus,
   RotateCcw,
   Search,
@@ -137,13 +138,13 @@ function SimpleSelect<T extends string>(props: {
   );
 }
 
-function Secret(props: { id?: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+function Secret(props: { id?: string; value: string; onChange: (v: string) => void; placeholder?: string; onGenerate?: () => void }) {
   const [shown, setShown] = useState(false);
   return (
     <div className="relative">
       <Input
         id={props.id}
-        className="pr-8 font-mono"
+        className={cn("font-mono", props.onGenerate ? "pr-14" : "pr-8")}
         type={shown ? "text" : "password"}
         value={props.value}
         placeholder={props.placeholder}
@@ -151,15 +152,16 @@ function Secret(props: { id?: string; value: string; onChange: (v: string) => vo
         spellCheck={false}
         onChange={(e) => props.onChange(e.target.value)}
       />
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
-        onClick={() => setShown(!shown)}
-        aria-label={shown ? "隐藏" : "显示"}
-      >
-        {shown ? <EyeOff /> : <Eye />}
-      </Button>
+      <div className="absolute top-1/2 right-1 flex -translate-y-1/2">
+        {props.onGenerate && (
+          <IconAction label="重新生成" onClick={props.onGenerate}>
+            <RefreshCw />
+          </IconAction>
+        )}
+        <IconAction label={shown ? "隐藏" : "显示"} onClick={() => setShown(!shown)}>
+          {shown ? <EyeOff /> : <Eye />}
+        </IconAction>
+      </div>
     </div>
   );
 }
@@ -425,7 +427,7 @@ function ListEditor(props: {
     <>
       <Textarea
         id={props.id}
-        className="field-sizing-fixed font-mono text-xs/relaxed"
+        className="field-sizing-fixed font-mono text-base md:text-xs/relaxed"
         rows={Math.min(12, Math.max(3, props.lines.length + 1))}
         value={props.lines.join("\n")}
         placeholder={props.placeholder}
@@ -966,7 +968,9 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
               />
             )}
           </FormField>
-          <FormField label="secret">{(id) => <Secret id={id} value={s.clashSecret} onChange={(clashSecret) => set({ clashSecret })} />}</FormField>
+          <FormField label="访问密码（secret）" hint="面板连接时填写；留空则任何网页都能控制它">
+            {(id) => <Secret id={id} value={s.clashSecret} onChange={(clashSecret) => set({ clashSecret })} onGenerate={() => set({ clashSecret: randomSecret() })} />}
+          </FormField>
         </div>
       </Panel>
       <Panel title="可选规则">
