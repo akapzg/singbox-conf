@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
@@ -7,9 +7,8 @@ import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type S
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
 import { CodeEditor } from "./code-editor";
+import { useDragSort } from "./drag-sort";
 import {
-  ArrowDown,
-  ArrowUp,
   Boxes,
   ChevronRight,
   CircleAlert,
@@ -202,14 +201,29 @@ function ItemCard(props: {
   meta: ReactNode;
   badges?: ReactNode;
   actions: ReactNode;
+  /** Drag handle shown before the title, with the row ref and state from useDragSort. */
+  handle?: ReactNode;
+  rowRef?: (el: HTMLElement | null) => void;
+  dragging?: boolean;
   children: ReactNode;
 }) {
   return (
-    <article id={`item-${props.id}`} className="rounded-lg bg-card text-card-foreground ring-1 ring-foreground/10">
-      <div className="flex items-center gap-1 pr-2">
+    <article
+      id={`item-${props.id}`}
+      ref={props.rowRef}
+      className={cn(
+        "rounded-lg bg-card text-card-foreground ring-1 ring-foreground/10 transition-shadow",
+        props.dragging && "relative z-10 shadow-lg ring-ring/50",
+      )}
+    >
+      <div className={cn("flex items-center gap-1 pr-2", props.handle && "pl-1")}>
+        {props.handle}
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg py-2.5 pl-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2.5 rounded-lg py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+            props.handle ? "pl-1" : "pl-3",
+          )}
           aria-expanded={props.expanded}
           onClick={props.onToggle}
         >
@@ -251,14 +265,12 @@ function IconAction(props: { label: string; onClick: () => void; disabled?: bool
 
 function NodeCard(props: {
   node: ProxyNode;
-  index: number;
-  count: number;
   issues: Issue[];
   expanded: boolean;
   onToggle: () => void;
   onChange: (n: ProxyNode) => void;
   onRemove: () => void;
-  onMove: (delta: number) => void;
+  sort: ReturnType<typeof useDragSort>;
 }) {
   const { node: n } = props;
   const set = (patch: Partial<ProxyNode>) => props.onChange({ ...n, ...patch });
@@ -269,6 +281,9 @@ function NodeCard(props: {
       id={n.id}
       expanded={props.expanded}
       onToggle={props.onToggle}
+      handle={<DragHandle label={n.tag || "未命名节点"} {...props.sort.handleProps(n.id)} />}
+      rowRef={props.sort.rowRef(n.id)}
+      dragging={props.sort.dragging === n.id}
       title={n.tag || "未命名节点"}
       meta={
         <span className="font-mono">
@@ -284,17 +299,9 @@ function NodeCard(props: {
         </>
       }
       actions={
-        <>
-          <IconAction label="上移" disabled={props.index === 0} onClick={() => props.onMove(-1)}>
-            <ArrowUp />
-          </IconAction>
-          <IconAction label="下移" disabled={props.index === props.count - 1} onClick={() => props.onMove(1)}>
-            <ArrowDown />
-          </IconAction>
-          <IconAction label={`删除节点 ${n.tag}`} danger onClick={props.onRemove}>
-            <Trash2 />
-          </IconAction>
-        </>
+        <IconAction label={`删除节点 ${n.tag}`} danger onClick={props.onRemove}>
+          <Trash2 />
+        </IconAction>
       }
     >
       <IssueList issues={props.issues} />
@@ -393,6 +400,24 @@ interface Candidate {
   detail: string;
 }
 
+/** Grip button for useDragSort: drag it, or focus it and press ↑/↓. */
+function DragHandle({ label, className, ...props }: { label: string } & HTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex h-7 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing",
+        className,
+      )}
+      aria-label={`拖动以调整 ${label} 的顺序，或按上下方向键`}
+      title="拖动排序"
+      {...props}
+    >
+      <GripVertical className="size-3.5" aria-hidden />
+    </button>
+  );
+}
+
 /**
  * Group members in one list: chosen members on top in their order (drag the handle, or focus it
  * and press ↑/↓; untick to remove), the rest below (tick to append). Search filters both;
@@ -400,12 +425,6 @@ interface Candidate {
  */
 function MemberPicker(props: { id?: string; candidates: Candidate[]; selected: string[]; onChange: (ids: string[]) => void }) {
   const [query, setQuery] = useState("");
-  const [dragging, setDragging] = useState<string | null>(null);
-  const rows = useRef(new Map<string, HTMLLIElement>());
-  // Pointer handlers outlive a render while dragging; read the latest order from here.
-  const latest = useRef(props.selected);
-  latest.current = props.selected;
-
   const q = query.trim().toLowerCase();
   const visible = (c: Candidate) => !q || `${c.tag} ${c.detail}`.toLowerCase().includes(q);
   const selectedSet = new Set(props.selected);
@@ -419,31 +438,13 @@ function MemberPicker(props: { id?: string; candidates: Candidate[]; selected: s
   const add = (ids: string[]) => props.onChange([...props.selected, ...ids.filter((id) => !selectedSet.has(id))]);
   const remove = (ids: string[]) => props.onChange(props.selected.filter((id) => !ids.includes(id)));
 
-  /** Put `id` right before `beforeId` (or at the end), in the full member list. */
-  const place = (id: string, beforeId: string | null) => {
-    const next = latest.current.filter((x) => x !== id);
-    const at = beforeId ? next.indexOf(beforeId) : next.length;
-    next.splice(at < 0 ? next.length : at, 0, id);
-    if (next.join() !== latest.current.join()) props.onChange(next);
-  };
-  /** The visible chosen row the pointer is above, by row midpoints. */
-  const rowBefore = (y: number, id: string): string | null => {
-    for (const c of chosen) {
-      if (c.id === id) continue;
-      const el = rows.current.get(c.id);
-      if (!el) continue;
-      const r = el.getBoundingClientRect();
-      if (y < r.top + r.height / 2) return c.id;
-    }
-    return null;
-  };
-  const step = (id: string, delta: number) => {
-    const ids = chosen.map((c) => c.id);
-    const i = ids.indexOf(id);
-    const j = i + delta;
-    if (j < 0 || j >= ids.length) return;
-    place(id, delta < 0 ? ids[j] : (ids[j + 1] ?? null));
-  };
+  // Reordering acts on the visible chosen rows; hidden members keep their places in the full list.
+  const visibleIds = chosen.map((c) => c.id);
+  const sort = useDragSort(visibleIds, (next) => {
+    const shown = new Set(visibleIds);
+    let k = 0;
+    props.onChange(props.selected.map((id) => (shown.has(id) ? next[k++] : id)));
+  });
 
   const row = (c: Candidate, checked: boolean) => (
     <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1.5 pr-2">
@@ -485,36 +486,10 @@ function MemberPicker(props: { id?: string; candidates: Candidate[]; selected: s
         {chosen.map((c) => (
           <li
             key={c.id}
-            className={cn("flex items-center rounded-md", dragging === c.id ? "bg-accent shadow-sm" : "hover:bg-muted/60")}
-            ref={(el) => {
-              if (el) rows.current.set(c.id, el);
-              else rows.current.delete(c.id);
-            }}
+            ref={sort.rowRef(c.id)}
+            className={cn("flex items-center rounded-md", sort.dragging === c.id ? "bg-accent shadow-sm" : "hover:bg-muted/60")}
           >
-            <button
-              type="button"
-              className="flex h-7 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing"
-              aria-label={`拖动以调整 ${c.tag} 的顺序，或按上下方向键`}
-              title="拖动排序"
-              onPointerDown={(e) => {
-                e.preventDefault();
-                e.currentTarget.setPointerCapture(e.pointerId);
-                setDragging(c.id);
-              }}
-              onPointerMove={(e) => {
-                if (dragging !== c.id) return;
-                place(c.id, rowBefore(e.clientY, c.id));
-              }}
-              onPointerUp={() => setDragging(null)}
-              onPointerCancel={() => setDragging(null)}
-              onKeyDown={(e) => {
-                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-                e.preventDefault();
-                step(c.id, e.key === "ArrowUp" ? -1 : 1);
-              }}
-            >
-              <GripVertical className="size-3.5" aria-hidden />
-            </button>
+            <DragHandle label={c.tag} {...sort.handleProps(c.id)} />
             {row(c, true)}
           </li>
         ))}
@@ -1102,13 +1077,11 @@ export default function App() {
     ...profile.settings.tailnets.map((t) => ({ id: t.id, tag: t.tag, kind: "tailnet" as const, detail: "" })),
     ...profile.groups.map((g) => ({ id: g.id, tag: g.tag, kind: "代理组" as const, detail: g.type === "urltest" ? "自动测速" : "手动选择" })),
   ];
-  const moveNode = (i: number, delta: number) =>
-    setProfile((p) => {
-      const nodes = [...p.nodes];
-      const [n] = nodes.splice(i, 1);
-      nodes.splice(i + delta, 0, n);
-      return { ...p, nodes };
-    });
+  // Client lists, proxy and auto follow the node order.
+  const nodeSort = useDragSort(
+    profile.nodes.map((n) => n.id),
+    (ids) => setProfile((p) => ({ ...p, nodes: ids.map((id) => p.nodes.find((n) => n.id === id)!) })),
+  );
   const addNode = (n: ProxyNode) => {
     setProfile((p) => ({ ...p, nodes: [...p.nodes, n] }));
     setExpanded((prev) => new Set(prev).add(n.id));
@@ -1344,7 +1317,7 @@ export default function App() {
                       <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => fileInput.current?.click()}>
                         从现有的 sing-box 配置导入
                       </button>
-                      。
+                      。拖动左侧手柄调整顺序，客户端里按此顺序显示。
                     </>
                   }
                 >
@@ -1355,14 +1328,12 @@ export default function App() {
                   <NodeCard
                     key={n.id}
                     node={n}
-                    index={i}
-                    count={profile.nodes.length}
                     issues={issuesFor(n.id)}
                     expanded={expanded.has(n.id)}
                     onToggle={() => toggle(n.id)}
                     onChange={(next) => updateNode(i, next)}
                     onRemove={() => removeNode(i)}
-                    onMove={(d) => moveNode(i, d)}
+                    sort={nodeSort}
                   />
                 ))}
               </>
