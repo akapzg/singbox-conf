@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Platform, Profile, ProxyNode, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
+import type { Platform, Profile, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
 import { freshTag, newNode, newTailnet } from "./defaults";
-import { clearStore, defaultStore, loadStore, newSavedProfile, normalizeProfile, saveStore, type Store } from "./storage";
+import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
+import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -424,24 +425,37 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
         <Field label="代理 DNS 服务器" hint="走代理的域名经代理用它解析">
           <select
             value={s.remoteDns.provider}
-            onChange={(e) => set({ remoteDns: { ...s.remoteDns, provider: e.target.value as RemoteDnsProvider } })}
+            onChange={(e) => set({ remoteDns: { ...s.remoteDns, provider: e.target.value as RemoteDnsChoice } })}
           >
             {Object.entries(REMOTE_DNS).map(([value, p]) => (
               <option key={value} value={value}>
                 {p.label}（{p.address}）
               </option>
             ))}
+            <option value="custom">自定义…</option>
           </select>
         </Field>
-        <Field label="协议">
-          <select
-            value={s.remoteDns.protocol}
-            onChange={(e) => set({ remoteDns: { ...s.remoteDns, protocol: e.target.value as RemoteDnsProtocol } })}
-          >
-            <option value="tls">DNS over TLS</option>
-            <option value="https">DNS over HTTPS</option>
-          </select>
-        </Field>
+        {s.remoteDns.provider !== "custom" ? (
+          <Field label="协议">
+            <select
+              value={s.remoteDns.protocol}
+              onChange={(e) => set({ remoteDns: { ...s.remoteDns, protocol: e.target.value as RemoteDnsProtocol } })}
+            >
+              <option value="tls">DNS over TLS</option>
+              <option value="https">DNS over HTTPS</option>
+            </select>
+          </Field>
+        ) : (
+          <div className="field wide">
+            <span className="field-label">自定义 DNS 服务器（JSON，可写注释；tag 由生成器填写，默认经 proxy 访问）</span>
+            <CodeEditor
+              value={s.remoteDns.custom}
+              onChange={(custom) => set({ remoteDns: { ...s.remoteDns, custom } })}
+              minRows={6}
+              maxRows={14}
+            />
+          </div>
+        )}
         <Field label="ECS 网段" hint="随查询发给代理 DNS 的 EDNS Client Subnet。留空时按代理服务器位置返回结果，通常更合适" wide>
           <input
             value={s.clientSubnet}
@@ -476,6 +490,13 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
       </div>
     </article>
   );
+}
+
+/** A node whose server is still the template's example address. */
+function isExampleNode(n: ProxyNode): boolean {
+  const { object } = nodeObject(n);
+  const server = object && typeof object.server === "string" ? object.server : "";
+  return /(^|\.)example\.com$/.test(server);
 }
 
 function uniqueName(name: string, store: Store): string {
@@ -666,15 +687,35 @@ export default function App() {
   };
   const askName = (message: string, initial: string) => prompt(message, initial)?.trim() || null;
 
-  const importProfile = async (file: File) => {
+  const importConfig = async (file: File) => {
+    let result: ImportResult;
     try {
-      const raw = JSON.parse(await file.text());
-      const name = uniqueName(typeof raw?.name === "string" && raw.name ? raw.name : file.name.replace(/\.json$/i, ""), store);
-      addProfile(name, normalizeProfile(raw));
-      setToast(`已导入为「${name}」`);
+      result = importSingBoxConfig(await file.text());
     } catch (e) {
       alert(`导入失败：${(e as Error).message}`);
+      return;
     }
+    // Untouched template examples (still pointing at example.com) are replaced rather than kept.
+    const keep = profile.nodes.every(isExampleNode) ? [] : profile.nodes;
+    const nodes = dedupeTags(result.nodes, [...keep.map((n) => n.tag), ...profile.settings.tailnets.map((t) => t.tag)]);
+    const tailnets = dedupeTags(result.tailnets, [...profile.settings.tailnets.map((t) => t.tag), ...nodes.map((n) => n.tag)]);
+    const summary = [
+      `从 ${file.name} 导入到配置「${active.name}」：`,
+      `· ${nodes.length} 个节点${nodes.length ? `（${nodes.map((n) => n.tag).join("、")}）` : ""}`,
+      `· ${tailnets.length} 个 tailnet${tailnets.length ? `（${tailnets.map((t) => t.tag).join("、")}）` : ""}`,
+      ...result.notes.map((n) => `· ${n}`),
+      ...(keep.length < profile.nodes.length ? ["· 现有的示例节点会被替换"] : []),
+      "",
+      "DNS 和分流规则不会导入，由本工具的策略生成。追加到现有内容之后，标签重复的会自动改名。",
+    ].join("\n");
+    if (!confirm(summary)) return;
+    setProfile((p) => ({
+      ...p,
+      nodes: [...keep, ...nodes],
+      settings: { ...p.settings, tailnets: [...p.settings.tailnets, ...tailnets] },
+    }));
+    setTab(nodes.length ? "nodes" : "tailscale");
+    setToast(`已导入 ${nodes.length} 个节点、${tailnets.length} 个 tailnet`);
   };
 
   const tailnets = profile.settings.tailnets;
@@ -734,18 +775,10 @@ export default function App() {
                 <MenuItem
                   onSelect={() => {
                     close();
-                    download(`singbox-confgen-${active.name.replace(/[\\/:*?"<>|]/g, "-")}.json`, JSON.stringify({ name: active.name, ...profile }, null, 2));
-                  }}
-                >
-                  导出当前配置（含密码）
-                </MenuItem>
-                <MenuItem
-                  onSelect={() => {
-                    close();
                     fileInput.current?.click();
                   }}
                 >
-                  导入配置…
+                  从 sing-box 配置导入节点…
                 </MenuItem>
                 <hr />
                 <MenuItem
@@ -781,7 +814,7 @@ export default function App() {
             hidden
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) importProfile(f);
+              if (f) importConfig(f);
               e.target.value = "";
             }}
           />
@@ -816,7 +849,13 @@ export default function App() {
           {tab === "nodes" && (
             <>
               <div className="pane-head">
-                <p className="muted">每个节点是一段 sing-box 出站配置。选择协议模板后添加，再填写服务器信息。</p>
+                <p className="muted">
+                  每个节点是一段 sing-box 出站配置。选择协议模板添加，或
+                  <button type="button" className="link" onClick={() => fileInput.current?.click()}>
+                    从现有的 sing-box 配置导入
+                  </button>
+                  。
+                </p>
                 <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
               </div>
               {profile.nodes.length === 0 && <p className="empty">还没有节点：选择协议模板，点击「添加节点」。</p>}

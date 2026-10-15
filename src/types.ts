@@ -10,6 +10,7 @@ export interface ProxyNode {
 
 export type Platform = "apple" | "android" | "linux" | "windows";
 export type RemoteDnsProvider = "google" | "cloudflare" | "quad9";
+export type RemoteDnsChoice = RemoteDnsProvider | "custom";
 export type RemoteDnsProtocol = "tls" | "https";
 
 export interface Tailnet {
@@ -33,7 +34,12 @@ export interface Tailnet {
 export interface Settings {
   platform: Platform;
   defaultMode: "GFWList" | "Non-CN" | "Global" | "Direct";
-  remoteDns: { provider: RemoteDnsProvider; protocol: RemoteDnsProtocol };
+  remoteDns: {
+    provider: RemoteDnsChoice;
+    protocol: RemoteDnsProtocol;
+    /** DNS server body as JSON with comments, used when provider is "custom". */
+    custom: string;
+  };
   /** EDNS client subnet sent with queries to the remote resolver; empty disables it. */
   clientSubnet: string;
   /** Clash API listen address; empty disables the API. */

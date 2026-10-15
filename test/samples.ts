@@ -90,5 +90,11 @@ export function sampleProfiles(): { name: string; profile: Profile }[] {
       samples.push({ name: `dns-${provider}-${protocol}`, profile: p });
     }
   }
+  {
+    const p = blueprintProfile();
+    p.nodes = [newNode({ tag: "hy2", body: filledBody("hysteria2") })];
+    p.settings.remoteDns = { ...p.settings.remoteDns, provider: "custom" }; // the default custom template
+    samples.push({ name: "dns-custom", profile: p });
+  }
   return samples;
 }

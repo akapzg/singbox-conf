@@ -1,4 +1,4 @@
-import type { Profile, ProxyNode, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
+import type { Profile, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
 import { ENDPOINT_TYPES, NEEDS_SERVER, NODE_TYPES, SECRET_FIELDS } from "./templates";
 
 type Json = Record<string, unknown>;
@@ -228,7 +228,29 @@ function dnsRules(s: Settings): Json[] {
   ];
 }
 
-export function remoteDnsServer(provider: RemoteDnsProvider, protocol: RemoteDnsProtocol): Json {
+/** DNS server types usable as the remote resolver (all reached through the proxy). */
+export const REMOTE_DNS_TYPES = ["tcp", "udp", "tls", "https", "quic", "h3"];
+
+/** The custom remote DNS server, or an error message. */
+export function customDnsServer(body: string): { server?: Json; error?: string } {
+  let o: unknown;
+  try {
+    o = parseJsonc(body);
+  } catch (e) {
+    return { error: `JSON 有误：${(e as Error).message}` };
+  }
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { error: "必须是一个 JSON 对象" };
+  const { type, tag: _tag, ...rest } = o as Json;
+  if (typeof type !== "string" || !REMOTE_DNS_TYPES.includes(type)) return { error: `type 必须是以下之一：${REMOTE_DNS_TYPES.join("、")}` };
+  if (!rest.server) return { error: "缺少 server" };
+  return { server: { type, tag: "remote", ...rest, ...("detour" in rest ? {} : { detour: "proxy" }) } };
+}
+
+export function remoteDnsServer(provider: RemoteDnsChoice, protocol: RemoteDnsProtocol, custom = ""): Json {
+  if (provider === "custom") {
+    // Fall back to Google so the config stays loadable while the custom server is being edited.
+    return customDnsServer(custom).server ?? remoteDnsServer("google", protocol);
+  }
   const p = REMOTE_DNS[provider];
   return {
     type: protocol,
@@ -251,7 +273,7 @@ function dnsServers(s: Settings): Json[] {
       ...(t.acceptDefaultResolvers ? { accept_default_resolvers: true } : {}),
       accept_search_domain: true,
     })),
-    remoteDnsServer(s.remoteDns.provider, s.remoteDns.protocol),
+    remoteDnsServer(s.remoteDns.provider, s.remoteDns.protocol, s.remoteDns.custom),
   ];
 }
 
@@ -575,5 +597,9 @@ export function validate(profile: Profile): Issue[] {
   const proxy = parseRuleList(s.proxyRules.join("\n"));
   if (proxy.invalid.length) err(ROUTING, `代理域名或 IP 格式不正确：${proxy.invalid.join("、")}`);
   if (s.clashController.trim() && !s.clashSecret) warn(SETTINGS, "Clash API 已开启但没有设置 secret");
+  if (s.remoteDns.provider === "custom") {
+    const { error } = customDnsServer(s.remoteDns.custom);
+    if (error) err(SETTINGS, `自定义代理 DNS 服务器：${error}（暂时改用 Google）`);
+  }
   return issues;
 }

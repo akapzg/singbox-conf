@@ -13,10 +13,20 @@ export function freshTag(prefix: string, used: string[]): string {
   for (let i = 1; ; i++) if (!used.includes(`${prefix}-${i}`)) return `${prefix}-${i}`;
 }
 
+export const CUSTOM_DNS_TEMPLATE = `{
+  // 任意 sing-box DNS 服务器，经代理访问：tcp / udp / tls / https / quic / h3
+  // 详见 https://sing-box.sagernet.org/zh/configuration/dns/server/
+  "type": "https",
+  "server": "1.1.1.1",
+  "server_port": 443,
+  "path": "/dns-query",
+  "tls": { "enabled": true, "server_name": "cloudflare-dns.com" }
+}`;
+
 export const defaultSettings = (): Settings => ({
   platform: "apple",
   defaultMode: "GFWList",
-  remoteDns: { provider: "google", protocol: "tls" },
+  remoteDns: { provider: "google", protocol: "tls", custom: CUSTOM_DNS_TEMPLATE },
   clientSubnet: "",
   clashController: "127.0.0.1:9090",
   clashSecret: "",

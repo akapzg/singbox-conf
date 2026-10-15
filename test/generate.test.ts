@@ -198,6 +198,36 @@ describe("DNS", () => {
   });
 });
 
+describe("custom remote DNS server", () => {
+  const withCustom = (custom: string) => {
+    const p = blueprintProfile();
+    p.settings.remoteDns = { ...p.settings.remoteDns, provider: "custom", custom };
+    return p;
+  };
+
+  it("uses the JSON body, filling in tag and the proxy detour", () => {
+    const cfg = gen(withCustom('{ // mine\n "type": "quic", "server": "9.9.9.9", "tls": {"enabled": true, "server_name": "dns.quad9.net"} }'));
+    expect(cfg.dns.servers.find((s: any) => s.tag === "remote")).toEqual({
+      type: "quic",
+      tag: "remote",
+      server: "9.9.9.9",
+      tls: { enabled: true, server_name: "dns.quad9.net" },
+      detour: "proxy",
+    });
+  });
+
+  it("keeps an explicit detour", () => {
+    const cfg = gen(withCustom('{"type":"udp","server":"10.0.0.53","detour":"direct"}'));
+    expect(cfg.dns.servers.find((s: any) => s.tag === "remote").detour).toBe("direct");
+  });
+
+  it("reports a broken body and falls back to Google so the config still loads", () => {
+    const p = withCustom('{"type":"doh","server":"x"}');
+    expect(validate(p).map((i) => i.message).join()).toContain("自定义代理 DNS 服务器：type 必须是");
+    expect(gen(p).dns.servers.find((s: any) => s.tag === "remote").server).toBe("8.8.8.8");
+  });
+});
+
 describe("custom direct domains", () => {
   const withList = (lines: string[]) => {
     const p = blueprintProfile();

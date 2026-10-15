@@ -3,7 +3,8 @@
 纯前端的 sing-box 配置生成器：在网页里填写代理服务器和少量偏好，实时生成完整的 `config.json`，可以复制或下载。
 
 - 需要 sing-box **1.14** 及以上（Apple 平台的 SFM/SFI、Android 的 SFA，或 Linux/Windows 命令行版）。
-- 没有后端，运行时不发出任何网络请求；设置只保存在当前浏览器的 localStorage 里。导出的设置文件含有密码，请妥善保管。
+- 没有后端，运行时不发出任何网络请求；设置只保存在当前浏览器的 localStorage 里，可以保存多套配置。
+- 可以从现有的 sing-box 配置（例如客户端里正在用的 `config.json`）导入节点和 Tailscale 设置；DNS 和分流规则由本工具生成。下载的 `config.json` 本身也能再导入回来。
 - 分流策略是一套固定、经过实测的规则（四种模式：GFWList、Non-CN、Global、Direct），设计理由见 [DESIGN.md](DESIGN.md)。需要深度定制时，直接修改生成的 JSON。
 
 ## 可以设置什么
@@ -13,7 +14,7 @@
 | 节点 | 用 JSON 编写（可写注释），从协议模板开始：Hysteria2、VLESS（Vision / Reality）、VMess、Trojan、Shadowsocks、ShadowTLS、TUIC、AnyTLS、Hysteria、NaiveProxy、Snell、SOCKS、HTTP、SSH、Tor，以及 WireGuard、OpenConnect、OpenVPN 端点 |
 | 分流 | 默认模式；直连域名；代理域名和 IP（适合被墙但不在 gfwlist 里的网站） |
 | Tailscale | 任意多个 tailnet：端点用 JSON 编写（可写注释）；MagicDNS、tailnet 默认 DNS、分域 DNS、额外路由、作为代理出口 |
-| 平台与高级设置 | 目标平台；代理 DNS 服务器（Google / Cloudflare / Quad9，DoT 或 DoH）；ECS；Clash API；Steam、禁止 iCloud 使用 QUIC |
+| 高级 | 目标平台；代理 DNS 服务器（Google / Cloudflare / Quad9，DoT 或 DoH，或用 JSON 自定义任意 DNS 服务器）；ECS；Clash API；Steam、禁止 iCloud 使用 QUIC |
 
 ## 浏览器设置建议
 
@@ -44,6 +45,7 @@ SING_BOX=$(python3 scripts/fetch-sing-box.py 1.14.3 /tmp/sing-box) npm run check
 - `src/generate.ts`：配置生成器和校验。
 - `src/types.ts`：设置的数据模型；`src/defaults.ts`：默认值；`src/templates.ts`：节点协议模板。
 - `src/legacy.ts`：把旧版（表单）保存的服务器迁移为 JSON 节点。
+- `src/importer.ts`：从现有 sing-box 配置导入节点和 Tailscale。
 - `src/App.tsx`：界面；`src/storage.ts`：本地保存和导入时的兼容处理。
 - `test/generate.test.ts`：
   - 用一份“个人配置”还原蓝本（`test/fixtures/tiger-baseline.json`，已匿名化）的非 DNS 部分；
