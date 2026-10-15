@@ -685,7 +685,7 @@ function GettingStarted(props: { onImport: () => void }) {
       "填入你的节点",
 "已有 sing-box 配置（比如 SFM、SFA 里正在用的）可以直接导入，只取其中的节点、Tailscale 和代理组。也可以展开下面的示例，把服务器、密码换成你的，或选协议模板新加。",
     ],
-    ["按需调整", "节点多可以在「代理组」里分组；「分流」里加自己的直连、代理名单；「高级」里选目标平台。"],
+    ["按需调整", "节点多可以在「代理组」里分组；「分流」里加自己的直连、代理名单；「设置」里选目标平台。"],
     ["导入客户端", "右上角下载 config.json，在 sing-box 客户端里新建配置并选这个文件。"],
   ];
   return (
@@ -1023,7 +1023,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "groups", label: "代理组" },
   { id: "routing", label: "分流" },
   { id: "tailscale", label: "Tailscale" },
-  { id: "settings", label: "高级" },
+  { id: "settings", label: "设置" },
 ];
 const TAB_KEY = "singbox-gen:tab";
 
@@ -1035,6 +1035,22 @@ function loadTab(): Tab {
     // Storage blocked: start on the first tab.
   }
   return "nodes";
+}
+
+/** Line height of the preview (.code: 12px × 1.5). */
+const PREVIEW_LINE = 18;
+
+/** First and last line of the object whose "tag" is `tag` in pretty-printed JSON. */
+function jsonBlock(text: string, tag: string): { start: number; end: number } | null {
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.trim().replace(/,$/, "") === `"tag": ${JSON.stringify(tag)}`);
+  if (at < 0) return null;
+  const indent = lines[at].length - lines[at].trimStart().length - 2;
+  let start = at;
+  while (start > 0 && !(lines[start].trim() === "{" && lines[start].length - lines[start].trimStart().length === indent)) start--;
+  let end = at;
+  while (end < lines.length - 1 && !(/^\},?$/.test(lines[end].trim()) && lines[end].length - lines[end].trimStart().length === indent)) end++;
+  return { start, end };
 }
 
 /** JSON with keys, strings, numbers and literals wrapped for colouring. */
@@ -1067,6 +1083,9 @@ export default function App() {
   const [showIssues, setShowIssues] = useState(false);
   const [preview, setPreview] = useState(false);
   const [scrollTo, setScrollTo] = useState<string | null>(null);
+  /** The node, group or tailnet last opened or edited; the preview follows it. */
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const previewRef = useRef<HTMLPreElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const active = store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
   const profile = active.profile;
@@ -1083,13 +1102,15 @@ export default function App() {
       // Ignore: only a convenience.
     }
   };
-  const toggle = (id: string) =>
+  const toggle = (id: string) => {
+    if (!expanded.has(id)) setFocusId(id);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  };
 
   useEffect(() => saveStore(store), [store]);
   useEffect(() => {
@@ -1248,6 +1269,14 @@ export default function App() {
         ? `${warnings.length} 条提醒`
         : "可以使用";
   const StatusIcon = errors.length ? CircleAlert : warnings.length || examplesLeft ? TriangleAlert : CircleCheck;
+  const focusTag = [...profile.nodes, ...profile.groups, ...tailnets].find((x) => x.id === focusId)?.tag;
+  const focusLines = useMemo(() => (focusTag ? jsonBlock(configText, focusTag) : null), [configText, focusTag]);
+  // Bring the focused item's JSON into view when another item gets focus (not on every keystroke).
+  useEffect(() => {
+    const pre = previewRef.current;
+    if (!pre || !focusLines) return;
+    pre.scrollTo({ top: Math.max(0, focusLines.start * PREVIEW_LINE - 48), behavior: "smooth" });
+  }, [focusId]);
   const configStats = `${configText.split("\n").length} 行 · ${(new Blob([configText]).size / 1024).toFixed(1)} KB`;
   /** Errors mean sing-box will likely refuse the file: say so before it leaves the page. */
   const confirmExport = async (verb: string) =>
@@ -1450,7 +1479,10 @@ export default function App() {
                     issues={issuesFor(n.id)}
                     expanded={expanded.has(n.id)}
                     onToggle={() => toggle(n.id)}
-                    onChange={(next) => updateNode(i, next)}
+                    onChange={(next) => {
+                      setFocusId(n.id);
+                      updateNode(i, next);
+                    }}
                     onRemove={() => removeNode(i)}
                     sort={nodeSort}
                   />
@@ -1501,7 +1533,10 @@ export default function App() {
                     issues={issuesFor(g.id)}
                     expanded={expanded.has(g.id)}
                     onToggle={() => toggle(g.id)}
-                    onChange={(next) => setProfile((p) => ({ ...p, groups: p.groups.map((x) => (x.id === g.id ? next : x)) }))}
+                    onChange={(next) => {
+                      setFocusId(g.id);
+                      setProfile((p) => ({ ...p, groups: p.groups.map((x) => (x.id === g.id ? next : x)) }));
+                    }}
                     onRemove={() => removeGroup(i)}
                   />
                 ))}
@@ -1526,7 +1561,10 @@ export default function App() {
                     issues={issuesFor(t.id)}
                     expanded={expanded.has(t.id)}
                     onToggle={() => toggle(t.id)}
-                    onChange={(next) => setSettings({ tailnets: tailnets.map((x, j) => (j === i ? next : x)) })}
+                    onChange={(next) => {
+                      setFocusId(t.id);
+                      setSettings({ tailnets: tailnets.map((x, j) => (j === i ? next : x)) });
+                    }}
                     onRemove={() => removeTailnet(i)}
                   />
                 ))}
@@ -1545,8 +1583,15 @@ export default function App() {
             <span className="font-mono text-xs font-medium">config.json</span>
             <span className="text-xs text-muted-foreground">{configStats}</span>
           </div>
-          <pre className="code min-h-0 flex-1 overflow-auto" tabIndex={0} aria-label="生成的 config.json">
-            {highlighted}
+          <pre ref={previewRef} className="code relative min-h-0 flex-1 overflow-auto" tabIndex={0} aria-label="生成的 config.json">
+            {focusLines && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 border-l-2 border-primary/60 bg-primary/[0.06] transition-[top,height] duration-200"
+                style={{ top: 14 + focusLines.start * PREVIEW_LINE, height: (focusLines.end - focusLines.start + 1) * PREVIEW_LINE }}
+              />
+            )}
+            <span className="relative">{highlighted}</span>
           </pre>
         </aside>
       </main>
