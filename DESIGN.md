@@ -112,7 +112,8 @@
 
 - React 19 + shadcn/ui（base-mira 风格，底层 Base UI）+ Tailwind v4。组件源码在 `src/components/ui/`，按需改；Base UI 用 `render` 属性代替 `asChild`，依赖 React 19 把 `ref` 当普通属性传递。
 - 顶栏固定：配置切换、管理菜单、检查结果、预览、复制、下载。检查结果和 config.json 预览都在右侧抽屉里，正文单栏，手机上不需要左右分屏。
-- 深色模式跟随系统（`main.tsx` 切换 `.dark`）。旧样式在 `styles.css` 里以 `--sb-*` 变量桥接到 shadcn 的主题变量，元素选择器限定在 `:where(.pane)` 内，迁移完成后删除。
+- 深色模式跟随系统（`main.tsx` 切换 `.dark`）。界面全部用 Tailwind 类和 shadcn 组件；`styles.css` 只剩 JSON 高亮、状态颜色、提示条等少量规则。
+- 节点、代理组、tailnet 是可折叠卡片（`ItemCard`），表单统一用 `FormField`（标签 + 控件 + 说明，大编辑框的说明放在上方）和 `ToggleRow`（开关）。代理组成员拖动手柄排序，也可聚焦手柄按 ↑/↓。
 
 ## 7. 已知局限
 

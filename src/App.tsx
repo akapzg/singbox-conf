@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
@@ -6,7 +6,37 @@ import { freshTag, newGroup, newNode, newTailnet } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
-import { Boxes, CircleAlert, CircleCheck, Copy, CopyPlus, Download, Ellipsis, Eye, FileUp, Pencil, Plus, RotateCcw, Trash2, TriangleAlert } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Boxes,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  Copy,
+  CopyPlus,
+  Download,
+  Ellipsis,
+  Eye,
+  EyeOff,
+  FileUp,
+  GripVertical,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Search,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
+import { cn } from "cn";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -49,21 +79,69 @@ function download(name: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-function Field(props: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
+/**
+ * Label, control and hint; `children` gets the id to put on the control. Large controls (editors,
+ * lists) set `hintAbove` so the hint is read before them.
+ */
+function FormField(props: { label: ReactNode; hint?: ReactNode; hintAbove?: boolean; wide?: boolean; children: (id: string) => ReactNode }) {
+  const id = useId();
+  const hint = props.hint && <FieldDescription className={props.hintAbove ? "-mt-1" : undefined}>{props.hint}</FieldDescription>;
   return (
-    <label className={props.wide ? "field wide" : "field"}>
-      <span className="field-label">{props.label}</span>
-      {props.children}
-      {props.hint && <span className="field-hint">{props.hint}</span>}
-    </label>
+    <Field className={props.wide ? "sm:col-span-2" : undefined}>
+      <FieldLabel htmlFor={id}>{props.label}</FieldLabel>
+      {props.hintAbove && hint}
+      {props.children(id)}
+      {!props.hintAbove && hint}
+    </Field>
   );
 }
 
-function Secret(props: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+/** A switch with a title and an explanation, the whole row clickable. */
+function ToggleRow(props: { checked: boolean; onChange: (v: boolean) => void; title: ReactNode; description?: ReactNode; wide?: boolean }) {
+  const id = useId();
+  return (
+    <Field orientation="horizontal" className={props.wide ? "sm:col-span-2" : undefined}>
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{props.title}</FieldLabel>
+        {props.description && <FieldDescription>{props.description}</FieldDescription>}
+      </FieldContent>
+      <Switch id={id} checked={props.checked} onCheckedChange={(v) => props.onChange(v)} />
+    </Field>
+  );
+}
+
+/** Select over a fixed option list; shows the option's label, not its value. */
+function SimpleSelect<T extends string>(props: {
+  id?: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  return (
+    <Select value={props.value} items={props.options} onValueChange={(v) => v !== null && props.onChange(v as T)}>
+      <SelectTrigger id={props.id} className={cn("w-full", props.className)} aria-label={props.ariaLabel}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {props.options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function Secret(props: { id?: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
   const [shown, setShown] = useState(false);
   return (
-    <span className="secret">
-      <input
+    <div className="relative">
+      <Input
+        id={props.id}
+        className="pr-8 font-mono"
         type={shown ? "text" : "password"}
         value={props.value}
         placeholder={props.placeholder}
@@ -71,19 +149,32 @@ function Secret(props: { value: string; onChange: (v: string) => void; placehold
         spellCheck={false}
         onChange={(e) => props.onChange(e.target.value)}
       />
-      <button type="button" className="ghost small" onClick={() => setShown(!shown)}>
-        {shown ? "隐藏" : "显示"}
-      </button>
-    </span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+        onClick={() => setShown(!shown)}
+        aria-label={shown ? "隐藏" : "显示"}
+      >
+        {shown ? <EyeOff /> : <Eye />}
+      </Button>
+    </div>
   );
 }
 
 function IssueList(props: { issues: Issue[] }) {
   if (!props.issues.length) return null;
   return (
-    <ul className="inline-issues">
+    <ul className="flex flex-col gap-1">
       {props.issues.map((i, k) => (
-        <li key={k} className={i.level}>
+        <li
+          key={k}
+          className={cn(
+            "flex items-start gap-2 rounded-md px-2.5 py-1.5 text-xs/relaxed",
+            i.level === "error" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-800 dark:text-amber-300",
+          )}
+        >
+          {i.level === "error" ? <CircleAlert className="mt-0.5 size-3.5 shrink-0" /> : <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />}
           {i.detail}
         </li>
       ))}
@@ -94,9 +185,65 @@ function IssueList(props: { issues: Issue[] }) {
 function IssueBadge(props: { issues: Issue[] }) {
   const errors = props.issues.filter((i) => i.level === "error").length;
   const warnings = props.issues.length - errors;
-  if (errors) return <span className="badge error">{errors} 个错误</span>;
-  if (warnings) return <span className="badge warning">{warnings} 条提醒</span>;
+  if (errors) return <Badge variant="destructive">{errors} 个错误</Badge>;
+  if (warnings) return <Badge className="bg-amber-500/15 text-amber-800 dark:text-amber-300">{warnings} 条提醒</Badge>;
   return null;
+}
+
+/** Collapsible card used for nodes, groups and tailnets. */
+function ItemCard(props: {
+  id: string;
+  expanded: boolean;
+  onToggle: () => void;
+  title: ReactNode;
+  meta: ReactNode;
+  badges?: ReactNode;
+  actions: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <article id={`item-${props.id}`} className="rounded-lg bg-card text-card-foreground ring-1 ring-foreground/10">
+      <div className="flex items-center gap-1 pr-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg py-2.5 pl-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          aria-expanded={props.expanded}
+          onClick={props.onToggle}
+        >
+          <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", props.expanded && "rotate-90")} aria-hidden />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-[13px] font-medium">{props.title}</span>
+            <span className="truncate text-xs text-muted-foreground">{props.meta}</span>
+          </span>
+          {props.badges && <span className="hidden shrink-0 items-center gap-1 sm:flex">{props.badges}</span>}
+        </button>
+        <div className="flex shrink-0 items-center">{props.actions}</div>
+      </div>
+      {props.expanded && <div className="flex flex-col gap-4 border-t px-4 py-4">{props.children}</div>}
+    </article>
+  );
+}
+
+function IconAction(props: { label: string; onClick: () => void; disabled?: boolean; danger?: boolean; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={props.danger ? "text-muted-foreground hover:bg-destructive/10 hover:text-destructive" : "text-muted-foreground"}
+            disabled={props.disabled}
+            onClick={props.onClick}
+            aria-label={props.label}
+          />
+        }
+      >
+        {props.children}
+      </TooltipTrigger>
+      <TooltipContent>{props.label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 function NodeCard(props: {
@@ -115,76 +262,62 @@ function NodeCard(props: {
   const { object, endpoint } = nodeObject(n);
   const server = object && typeof object.server === "string" ? `${object.server}${object.server_port ? `:${object.server_port}` : ""}` : "";
   return (
-    <article className={`card node${props.expanded ? " open" : ""}`} id={`item-${n.id}`}>
-      <div className="card-summary">
-        <button type="button" className="summary-toggle" aria-expanded={props.expanded} onClick={props.onToggle}>
-          <span className="chevron" aria-hidden="true" />
-          <span className="summary-main">
-            <span className="summary-title">{n.tag || "未命名节点"}</span>
-            <span className="summary-meta mono">
-              {object ? String(object.type) : "未识别"}
-              {server && ` · ${server}`}
-            </span>
-          </span>
-          <span className="summary-badges">
-            {endpoint && <span className="badge">端点</span>}
-            {!n.inGroups && <span className="badge">不在代理组</span>}
-            <IssueBadge issues={props.issues} />
-          </span>
-        </button>
-        <div className="card-actions">
-          <button type="button" className="icon" disabled={props.index === 0} onClick={() => props.onMove(-1)} aria-label="上移" title="上移">
-            ↑
-          </button>
-          <button
-            type="button"
-            className="icon"
-            disabled={props.index === props.count - 1}
-            onClick={() => props.onMove(1)}
-            aria-label="下移"
-            title="下移"
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            className="icon danger"
-            aria-label={`删除节点 ${n.tag}`}
-            title="删除"
-            onClick={props.onRemove}
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-      {props.expanded && (
-        <div className="card-body">
-          <IssueList issues={props.issues} />
-          <Field label="标签" hint="出站标签，也是在客户端里看到的节点名" wide>
-            <input value={n.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
-          </Field>
-          <div className="field">
-            <span className="field-label">节点配置（JSON，可写注释；tag 由生成器填写）</span>
-            <CodeEditor value={n.body} onChange={(body) => set({ body })} />
-          </div>
-          <label className="check">
-            <input type="checkbox" checked={n.inGroups} onChange={(e) => set({ inGroups: e.target.checked })} />
-            <span>
-              加入代理组<span className="muted">（出现在 proxy 选择器和 auto 自动测速中；只作为其他节点 detour 的可以不勾）</span>
-            </span>
-          </label>
-        </div>
-      )}
-    </article>
+    <ItemCard
+      id={n.id}
+      expanded={props.expanded}
+      onToggle={props.onToggle}
+      title={n.tag || "未命名节点"}
+      meta={
+        <span className="font-mono">
+          {object ? String(object.type) : "未识别"}
+          {server && ` · ${server}`}
+        </span>
+      }
+      badges={
+        <>
+          {endpoint && <Badge variant="secondary">端点</Badge>}
+          {!n.inGroups && <Badge variant="outline">不在代理组</Badge>}
+          <IssueBadge issues={props.issues} />
+        </>
+      }
+      actions={
+        <>
+          <IconAction label="上移" disabled={props.index === 0} onClick={() => props.onMove(-1)}>
+            <ArrowUp />
+          </IconAction>
+          <IconAction label="下移" disabled={props.index === props.count - 1} onClick={() => props.onMove(1)}>
+            <ArrowDown />
+          </IconAction>
+          <IconAction label={`删除节点 ${n.tag}`} danger onClick={props.onRemove}>
+            <Trash2 />
+          </IconAction>
+        </>
+      }
+    >
+      <IssueList issues={props.issues} />
+      <FormField label="标签" hint="出站标签，也是在客户端里看到的节点名">
+        {(id) => <Input id={id} className="font-mono" value={n.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />}
+      </FormField>
+      <FormField hintAbove label="节点配置" hint="sing-box 出站 JSON，可写注释；tag 由生成器填写">
+        {(id) => <CodeEditor id={id} value={n.body} onChange={(body) => set({ body })} />}
+      </FormField>
+      <ToggleRow
+        checked={n.inGroups}
+        onChange={(inGroups) => set({ inGroups })}
+        title="加入代理组"
+        description="出现在 proxy 选择器和 auto 自动测速中；只作为其他节点 detour 的可以关掉"
+      />
+    </ItemCard>
   );
 }
 
 /** Textarea for JSON with comments: Tab indents instead of leaving the field. */
-function CodeEditor(props: { value: string; onChange: (v: string) => void; minRows?: number; maxRows?: number }) {
+function CodeEditor(props: { id?: string; value: string; onChange: (v: string) => void; minRows?: number; maxRows?: number }) {
   const lines = props.value.split("\n").length;
   return (
-    <textarea
-      className="mono code-input"
+    <Textarea
+      id={props.id}
+      className="field-sizing-fixed font-mono text-xs/relaxed [tab-size:2]"
       rows={Math.min(props.maxRows ?? 24, Math.max(props.minRows ?? 6, lines + 1))}
       value={props.value}
       spellCheck={false}
@@ -204,27 +337,22 @@ function CodeEditor(props: { value: string; onChange: (v: string) => void; minRo
   );
 }
 
+const TEMPLATE_OPTIONS = TEMPLATES.map((t) => ({ value: t.id, label: t.label }));
+
 function AddNode(props: { usedTags: string[]; onAdd: (n: ProxyNode) => void }) {
   const [templateId, setTemplateId] = useState(TEMPLATES[0].id);
   return (
-    <div className="row add-node">
-      <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} aria-label="协议模板">
-        {TEMPLATES.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.label}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        className="primary"
+    <div className="flex items-center gap-1.5">
+      <SimpleSelect value={templateId} options={TEMPLATE_OPTIONS} onChange={setTemplateId} className="w-44" ariaLabel="协议模板" />
+      <Button
         onClick={() => {
           const t = TEMPLATES.find((x) => x.id === templateId)!;
           props.onAdd(newNode({ tag: freshTag(t.tagPrefix, props.usedTags), body: t.body }));
         }}
       >
+        <Plus />
         添加节点
-      </button>
+      </Button>
     </div>
   );
 }
@@ -245,6 +373,7 @@ const MODES: { value: Settings["defaultMode"]; label: string }[] = [
 
 /** Line-based list editor with live parse feedback. */
 function ListEditor(props: {
+  id?: string;
   lines: string[];
   onChange: (lines: string[]) => void;
   placeholder: string;
@@ -254,17 +383,18 @@ function ListEditor(props: {
   const { count, invalid } = props.summary(props.lines.join("\n"));
   return (
     <>
-      <textarea
-        className="mono"
+      <Textarea
+        id={props.id}
+        className="field-sizing-fixed font-mono text-xs/relaxed"
         rows={Math.min(12, Math.max(3, props.lines.length + 1))}
         value={props.lines.join("\n")}
         placeholder={props.placeholder}
         spellCheck={false}
         onChange={(e) => props.onChange(e.target.value.split("\n"))}
       />
-      <p className="muted">
+      <p className="text-xs text-muted-foreground">
         {count ? `已识别 ${count} ${props.unit}` : "未设置"}
-        {invalid.length > 0 && <span className="invalid">；无法识别：{invalid.join("、")}</span>}
+        {invalid.length > 0 && <span className="text-destructive">；无法识别：{invalid.join("、")}</span>}
       </p>
     </>
   );
@@ -291,7 +421,7 @@ interface Candidate {
  * and press ↑/↓; untick to remove), the rest below (tick to append). Search filters both;
  * "select matches" ticks all visible.
  */
-function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onChange: (ids: string[]) => void }) {
+function MemberPicker(props: { id?: string; candidates: Candidate[]; selected: string[]; onChange: (ids: string[]) => void }) {
   const [query, setQuery] = useState("");
   const [dragging, setDragging] = useState<string | null>(null);
   const rows = useRef(new Map<string, HTMLLIElement>());
@@ -338,40 +468,47 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
     place(id, delta < 0 ? ids[j] : (ids[j + 1] ?? null));
   };
 
-  const label = (c: Candidate) => (
-    <span className="member-label">
-      <span className="mono">{c.tag}</span>
-      <span className="muted">
-        {" "}
-        · {c.kind}
-        {c.detail && ` · ${c.detail}`}
+  const row = (c: Candidate, checked: boolean) => (
+    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 py-1.5 pr-2">
+      <Checkbox
+        checked={checked}
+        onCheckedChange={() => (checked ? remove : add)([c.id])}
+        aria-label={`${checked ? "移出" : "加入"} ${c.tag}`}
+      />
+      <span className="min-w-0 truncate">
+        <span className="font-mono">{c.tag}</span>
+        <span className="text-muted-foreground">
+          {" "}
+          · {c.kind}
+          {c.detail && ` · ${c.detail}`}
+        </span>
       </span>
-    </span>
+    </label>
   );
   return (
-    <div className="member-picker">
-      <div className="row member-tools">
-        <input
-          type="search"
-          value={query}
-          placeholder="按名称、协议或服务器筛选，例如 us、hysteria2"
-          aria-label="筛选成员"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button
-          type="button"
-          className="ghost small"
-          disabled={!matches.length}
-          onClick={() => (allMatched ? remove : add)(matches.map((c) => c.id))}
-        >
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="relative min-w-48 flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+          <Input
+            id={props.id}
+            type="search"
+            className="pl-7"
+            value={query}
+            placeholder="按名称、协议或服务器筛选，例如 us、hysteria2"
+            aria-label="筛选成员"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <Button variant="outline" disabled={!matches.length} onClick={() => (allMatched ? remove : add)(matches.map((c) => c.id))}>
           {allMatched ? `取消选择这 ${matches.length} 项` : `选中${q ? "匹配的" : "全部"} ${matches.length} 项`}
-        </button>
+        </Button>
       </div>
-      <ul className="member-list" aria-label="成员">
+      <ul className="max-h-80 overflow-y-auto rounded-md border p-1 text-xs" aria-label="成员">
         {chosen.map((c) => (
           <li
             key={c.id}
-            className={dragging === c.id ? "chosen dragging" : "chosen"}
+            className={cn("flex items-center rounded-md", dragging === c.id ? "bg-accent shadow-sm" : "hover:bg-muted/60")}
             ref={(el) => {
               if (el) rows.current.set(c.id, el);
               else rows.current.delete(c.id);
@@ -379,7 +516,7 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
           >
             <button
               type="button"
-              className="drag-handle"
+              className="flex h-7 w-6 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30 active:cursor-grabbing"
               aria-label={`拖动以调整 ${c.tag} 的顺序，或按上下方向键`}
               title="拖动排序"
               onPointerDown={(e) => {
@@ -399,29 +536,27 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
                 step(c.id, e.key === "ArrowUp" ? -1 : 1);
               }}
             >
-              <span aria-hidden="true" />
+              <GripVertical className="size-3.5" aria-hidden />
             </button>
-            <label className="check">
-              <input type="checkbox" checked onChange={() => remove([c.id])} aria-label={`移出 ${c.tag}`} />
-              {label(c)}
-            </label>
+            {row(c, true)}
           </li>
         ))}
-        {chosen.length > 0 && rest.length > 0 && <li className="member-divider" role="separator" />}
+        {chosen.length > 0 && rest.length > 0 && <li className="mx-2 my-1 border-t" role="separator" />}
         {rest.map((c) => (
-          <li key={c.id}>
-            <span className="drag-spacer" aria-hidden="true" />
-            <label className="check">
-              <input type="checkbox" checked={false} onChange={() => add([c.id])} aria-label={`加入 ${c.tag}`} />
-              {label(c)}
-            </label>
+          <li key={c.id} className="flex items-center rounded-md pl-6 hover:bg-muted/60">
+            {row(c, false)}
           </li>
         ))}
-        {!chosen.length && !rest.length && <li className="muted">没有匹配的项</li>}
+        {!chosen.length && !rest.length && <li className="px-2 py-1.5 text-muted-foreground">没有匹配的项</li>}
       </ul>
     </div>
   );
 }
+
+const GROUP_TYPES: { value: ProxyGroup["type"]; label: string }[] = [
+  { value: "selector", label: "手动选择" },
+  { value: "urltest", label: "自动测速" },
+];
 
 function GroupCard(props: {
   group: ProxyGroup;
@@ -435,141 +570,179 @@ function GroupCard(props: {
   const { group: g, candidates } = props;
   const set = (patch: Partial<ProxyGroup>) => props.onChange({ ...g, ...patch });
   const memberTags = g.members.map((id) => candidates.find((c) => c.id === id)?.tag).filter(Boolean) as string[];
+  const defaultOptions = [
+    { value: "", label: "第一个成员" },
+    ...g.members.flatMap((id) => {
+      const c = candidates.find((x) => x.id === id);
+      return c ? [{ value: id, label: c.tag }] : [];
+    }),
+  ];
   return (
-    <article className={`card node${props.expanded ? " open" : ""}`} id={`item-${g.id}`}>
-      <div className="card-summary">
-        <button type="button" className="summary-toggle" aria-expanded={props.expanded} onClick={props.onToggle}>
-          <span className="chevron" aria-hidden="true" />
-          <span className="summary-main">
-            <span className="summary-title">{g.tag || "未命名代理组"}</span>
-            <span className="summary-meta">
-              {g.type === "urltest" ? "自动测速" : "手动选择"} · {memberTags.length} 个成员
-              {memberTags.length > 0 && <span className="mono">：{memberTags.slice(0, 4).join("、")}{memberTags.length > 4 ? "…" : ""}</span>}
+    <ItemCard
+      id={g.id}
+      expanded={props.expanded}
+      onToggle={props.onToggle}
+      title={g.tag || "未命名代理组"}
+      meta={
+        <>
+          {g.type === "urltest" ? "自动测速" : "手动选择"} · {memberTags.length} 个成员
+          {memberTags.length > 0 && (
+            <span className="font-mono">
+              ：{memberTags.slice(0, 4).join("、")}
+              {memberTags.length > 4 ? "…" : ""}
             </span>
-          </span>
-          <span className="summary-badges">
-            <IssueBadge issues={props.issues} />
-          </span>
-        </button>
-        <div className="card-actions">
-          <button type="button" className="icon danger" aria-label={`删除代理组 ${g.tag}`} title="删除" onClick={props.onRemove}>
-            ✕
-          </button>
-        </div>
-      </div>
-      {props.expanded && (
-        <div className="card-body">
-          <IssueList issues={props.issues} />
-          <div className="form-grid">
-            <Field label="名称" hint="在客户端的节点列表里显示的组名">
-              <input value={g.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
-            </Field>
-            <div className="field">
-              <span className="field-label">类型</span>
-              <div className="segmented" role="radiogroup" aria-label="代理组类型">
-                {(
-                  [
-                    ["selector", "手动选择"],
-                    ["urltest", "自动测速"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={g.type === value}
-                    className={g.type === value ? "seg active" : "seg"}
-                    onClick={() => set({ type: value })}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <span className="field-hint">{g.type === "urltest" ? "定时测速，自动使用延迟最低的成员" : "在客户端里手动选用哪个成员"}</span>
-            </div>
-          </div>
-          <div className="field">
-            <span className="field-label">
-              成员（已选 {g.members.length} 项，排在上面；客户端按此顺序显示
-              {g.type === "selector" ? "，没设默认选中时用第一个" : ""}）
-            </span>
-            <MemberPicker candidates={candidates.filter((c) => c.id !== g.id)} selected={g.members} onChange={(members) => set({ members })} />
-          </div>
-          {g.type === "selector" ? (
-            <Field label="默认选中" hint="客户端第一次启动时选中的成员">
-              <select value={g.defaultMember} onChange={(e) => set({ defaultMember: e.target.value })}>
-                <option value="">第一个成员</option>
-                {g.members.map((id) => {
-                  const c = candidates.find((x) => x.id === id);
-                  return c ? (
-                    <option key={id} value={id}>
-                      {c.tag}
-                    </option>
-                  ) : null;
-                })}
-              </select>
-            </Field>
-          ) : (
-            <div className="form-grid">
-              <Field label="测速间隔" hint="留空为 3m">
-                <input value={g.interval} placeholder="3m" spellCheck={false} onChange={(e) => set({ interval: e.target.value.trim() })} />
-              </Field>
-              <Field label="容差（毫秒）" hint="延迟差在此范围内不切换，留空为 50">
-                <input
-                  value={g.tolerance ?? ""}
-                  placeholder="50"
-                  inputMode="numeric"
-                  onChange={(e) => set({ tolerance: e.target.value.trim() === "" ? null : Number(e.target.value) })}
-                />
-              </Field>
-              <Field label="测速地址" hint="留空为 https://www.gstatic.com/generate_204" wide>
-                <input value={g.testUrl} placeholder="https://www.gstatic.com/generate_204" spellCheck={false} onChange={(e) => set({ testUrl: e.target.value.trim() })} />
-              </Field>
-            </div>
           )}
+        </>
+      }
+      badges={<IssueBadge issues={props.issues} />}
+      actions={
+        <IconAction label={`删除代理组 ${g.tag}`} danger onClick={props.onRemove}>
+          <Trash2 />
+        </IconAction>
+      }
+    >
+      <IssueList issues={props.issues} />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField label="名称" hint="在客户端的节点列表里显示的组名">
+          {(id) => <Input id={id} className="font-mono" value={g.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />}
+        </FormField>
+        <Field>
+          <FieldLabel>类型</FieldLabel>
+          <ToggleGroup
+            variant="outline"
+            spacing={0}
+            value={[g.type]}
+            onValueChange={(v) => v[0] && set({ type: v[0] as ProxyGroup["type"] })}
+            aria-label="代理组类型"
+          >
+            {GROUP_TYPES.map((t) => (
+              <ToggleGroupItem key={t.value} value={t.value} className="px-3 aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:hover:bg-primary/90">
+                {t.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <FieldDescription>{g.type === "urltest" ? "定时测速，自动使用延迟最低的成员" : "在客户端里手动选用哪个成员"}</FieldDescription>
+        </Field>
+      </div>
+      <FormField
+        hintAbove
+        label={`成员（已选 ${g.members.length} 项）`}
+        hint={`已选的排在上面，拖动左侧手柄调整顺序；客户端按此顺序显示${g.type === "selector" ? "，没设默认选中时用第一个" : ""}`}
+      >
+        {(id) => <MemberPicker id={id} candidates={candidates.filter((c) => c.id !== g.id)} selected={g.members} onChange={(members) => set({ members })} />}
+      </FormField>
+      {g.type === "selector" ? (
+        <FormField label="默认选中" hint="客户端第一次启动时选中的成员">
+          {(id) => <SimpleSelect id={id} value={g.defaultMember} options={defaultOptions} onChange={(defaultMember) => set({ defaultMember })} className="sm:w-1/2" />}
+        </FormField>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="测速间隔" hint="留空为 3m">
+            {(id) => <Input id={id} value={g.interval} placeholder="3m" spellCheck={false} onChange={(e) => set({ interval: e.target.value.trim() })} />}
+          </FormField>
+          <FormField label="容差（毫秒）" hint="延迟差在此范围内不切换，留空为 50">
+            {(id) => (
+              <Input
+                id={id}
+                value={g.tolerance ?? ""}
+                placeholder="50"
+                inputMode="numeric"
+                onChange={(e) => set({ tolerance: e.target.value.trim() === "" ? null : Number(e.target.value) })}
+              />
+            )}
+          </FormField>
+          <FormField label="测速地址" hint="留空为 https://www.gstatic.com/generate_204" wide>
+            {(id) => (
+              <Input
+                id={id}
+                value={g.testUrl}
+                placeholder="https://www.gstatic.com/generate_204"
+                spellCheck={false}
+                onChange={(e) => set({ testUrl: e.target.value.trim() })}
+              />
+            )}
+          </FormField>
         </div>
       )}
-    </article>
+    </ItemCard>
+  );
+}
+
+function SectionHead(props: { description: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <p className="min-w-60 flex-1 text-xs/relaxed text-muted-foreground">{props.description}</p>
+      {props.children}
+    </div>
+  );
+}
+
+function Empty(props: { children: ReactNode }) {
+  return <p className="rounded-lg border border-dashed px-4 py-8 text-center text-xs text-muted-foreground">{props.children}</p>;
+}
+
+/** A plain settings panel. */
+function Panel(props: { title?: ReactNode; description?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-4 rounded-lg bg-card p-4 text-card-foreground ring-1 ring-foreground/10">
+      {(props.title || props.description) && (
+        <header className="flex flex-col gap-0.5">
+          {props.title && <h2 className="text-sm font-medium">{props.title}</h2>}
+          {props.description && <p className="text-xs/relaxed text-muted-foreground">{props.description}</p>}
+        </header>
+      )}
+      {props.children}
+    </section>
   );
 }
 
 function RoutingCard(props: { settings: Settings; onChange: (patch: Partial<Settings>) => void }) {
   const { settings: s } = props;
   return (
-    <article className="card">
-      <p className="muted">
-        列表每行一项，域名同时匹配所有子域名；<span className="mono">#</span> 之后为注释。
-      </p>
-      <Field label="默认模式" hint="启动时使用的模式，运行中可在客户端或 Clash API 中切换" wide>
-        <select value={s.defaultMode} onChange={(e) => props.onChange({ defaultMode: e.target.value as Settings["defaultMode"] })}>
-          {MODES.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <div className="field">
-        <span className="field-label">直连域名（除 Global 外始终直连，用本地 DNS 解析）</span>
-        <ListEditor
-          lines={s.directDomains}
-          onChange={(directDomains) => props.onChange({ directDomains })}
-          placeholder={"example.cn\nintranet.example.com  # 公司内网"}
-          summary={domainSummary}
-          unit="个域名"
+    <>
+      <Panel title="默认模式" description="启动时使用的模式，运行中可在客户端或 Clash API 中切换">
+        <SimpleSelect
+          value={s.defaultMode}
+          options={MODES}
+          onChange={(defaultMode) => props.onChange({ defaultMode })}
+          className="sm:w-1/2"
+          ariaLabel="默认模式"
         />
-      </div>
-      <div className="field">
-        <span className="field-label">代理域名和 IP（除 Direct 外始终走代理；适合被墙但不在 gfwlist 里的网站）</span>
-        <ListEditor
-          lines={s.proxyRules}
-          onChange={(proxyRules) => props.onChange({ proxyRules })}
-          placeholder={"intercom.io\n203.0.113.0/24"}
-          summary={ruleSummary}
-          unit="项"
-        />
-      </div>
-    </article>
+      </Panel>
+      <Panel
+        title="自定义列表"
+        description={
+          <>
+            每行一项，域名同时匹配所有子域名；<span className="font-mono">#</span> 之后为注释。
+          </>
+        }
+      >
+        <FormField hintAbove label="直连域名" hint="除 Global 外始终直连，用本地 DNS 解析">
+          {(id) => (
+            <ListEditor
+              id={id}
+              lines={s.directDomains}
+              onChange={(directDomains) => props.onChange({ directDomains })}
+              placeholder={"example.cn\nintranet.example.com  # 公司内网"}
+              summary={domainSummary}
+              unit="个域名"
+            />
+          )}
+        </FormField>
+        <FormField hintAbove label="代理域名和 IP" hint="除 Direct 外始终走代理；适合被墙但不在 gfwlist 里的网站">
+          {(id) => (
+            <ListEditor
+              id={id}
+              lines={s.proxyRules}
+              onChange={(proxyRules) => props.onChange({ proxyRules })}
+              placeholder={"intercom.io\n203.0.113.0/24"}
+              summary={ruleSummary}
+              unit="项"
+            />
+          )}
+        </FormField>
+      </Panel>
+    </>
   );
 }
 
@@ -586,175 +759,186 @@ function TailnetCard(props: {
   const { endpoint } = tailnetEndpoint(t);
   const host = endpoint && typeof endpoint.hostname === "string" ? endpoint.hostname : "";
   return (
-    <article className={`card node${props.expanded ? " open" : ""}`} id={`item-${t.id}`}>
-      <div className="card-summary">
-        <button type="button" className="summary-toggle" aria-expanded={props.expanded} onClick={props.onToggle}>
-          <span className="chevron" aria-hidden="true" />
-          <span className="summary-main">
-            <span className="summary-title">{t.tag || "未命名 tailnet"}</span>
-            <span className="summary-meta mono">
-              tailscale{host && ` · ${host}`}
-              {(t.magicDns || t.dnsDomains.some((l) => l.trim())) && ` · dns: ${t.tag}-dns`}
-            </span>
-          </span>
-          <span className="summary-badges">
-            {t.asProxy && <span className="badge">代理出口</span>}
-            <IssueBadge issues={props.issues} />
-          </span>
-        </button>
-        <div className="card-actions">
-          <button
-            type="button"
-            className="icon danger"
-            aria-label={`删除 tailnet ${t.tag}`}
-            title="删除"
-            onClick={props.onRemove}
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-      {props.expanded && (
-      <div className="card-body">
+    <ItemCard
+      id={t.id}
+      expanded={props.expanded}
+      onToggle={props.onToggle}
+      title={t.tag || "未命名 tailnet"}
+      meta={
+        <span className="font-mono">
+          tailscale{host && ` · ${host}`}
+          {(t.magicDns || t.dnsDomains.some((l) => l.trim())) && ` · dns: ${t.tag}-dns`}
+        </span>
+      }
+      badges={
+        <>
+          {t.asProxy && <Badge variant="secondary">代理出口</Badge>}
+          <IssueBadge issues={props.issues} />
+        </>
+      }
+      actions={
+        <IconAction label={`删除 tailnet ${t.tag}`} danger onClick={props.onRemove}>
+          <Trash2 />
+        </IconAction>
+      }
+    >
       <IssueList issues={props.issues} />
-      <Field label="标签" hint="端点的标签；DNS 服务器会命名为「标签-dns」" wide>
-        <input value={t.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
-      </Field>
-      <div className="field">
-        <span className="field-label">端点配置（JSON，可写注释；type 和 tag 由生成器填写）</span>
-        <CodeEditor value={t.endpoint} onChange={(endpoint) => set({ endpoint })} maxRows={16} />
-      </div>
-      <label className="check">
-        <input type="checkbox" checked={t.magicDns} onChange={(e) => set({ magicDns: e.target.checked })} />
-        <span>
-          MagicDNS<span className="muted">（tailnet 设备名和 tailnet 下发的 DNS 路由后缀交给它解析）</span>
-        </span>
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={t.acceptDefaultResolvers}
-          onChange={(e) => set({ acceptDefaultResolvers: e.target.checked })}
-        />
-        <span>
-          使用 tailnet 的默认 DNS 服务器<span className="muted">（交给它的域名不在 MagicDNS 里时，用 tailnet 配置的全局 DNS 解析）</span>
-        </span>
-      </label>
-      <div className="field">
-        <span className="field-label">分域 DNS：交给这个 tailnet 解析的域名（例如公司内网域名，才能拿到内网地址）</span>
-        <ListEditor
-          lines={t.dnsDomains}
-          onChange={(dnsDomains) => set({ dnsDomains })}
-          placeholder="corp.example.com"
-          summary={domainSummary}
-          unit="个域名"
-        />
-      </div>
-      <div className="field">
-        <span className="field-label">额外路由：走这个 tailnet 的域名或 IP 段（tailnet 设备和已批准的子网路由会自动识别，不用填）</span>
-        <ListEditor
-          lines={t.routes}
-          onChange={(routes) => set({ routes })}
-          placeholder={"10.20.0.0/16\nnas.example.com"}
-          summary={ruleSummary}
-          unit="项"
-        />
-      </div>
-      <label className="check">
-        <input type="checkbox" checked={t.asProxy} onChange={(e) => set({ asProxy: e.target.checked })} />
-        <span>
-          作为代理出口<span className="muted">（加入 proxy 选择器，可手动选用；需要在端点里设置 exit_node）</span>
-        </span>
-      </label>
-      </div>
-      )}
-    </article>
+      <FormField label="标签" hint="端点的标签；DNS 服务器会命名为「标签-dns」">
+        {(id) => <Input id={id} className="font-mono" value={t.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />}
+      </FormField>
+      <FormField hintAbove label="端点配置" hint="sing-box tailscale 端点 JSON，可写注释；type 和 tag 由生成器填写">
+        {(id) => <CodeEditor id={id} value={t.endpoint} onChange={(endpoint) => set({ endpoint })} maxRows={16} />}
+      </FormField>
+      <ToggleRow
+        checked={t.magicDns}
+        onChange={(magicDns) => set({ magicDns })}
+        title="MagicDNS"
+        description="tailnet 设备名和 tailnet 下发的 DNS 路由后缀交给它解析"
+      />
+      <ToggleRow
+        checked={t.acceptDefaultResolvers}
+        onChange={(acceptDefaultResolvers) => set({ acceptDefaultResolvers })}
+        title="使用 tailnet 的默认 DNS 服务器"
+        description="交给它的域名不在 MagicDNS 里时，用 tailnet 配置的全局 DNS 解析"
+      />
+      <FormField hintAbove label="分域 DNS" hint="交给这个 tailnet 解析的域名，例如公司内网域名，才能拿到内网地址">
+        {(id) => (
+          <ListEditor
+            id={id}
+            lines={t.dnsDomains}
+            onChange={(dnsDomains) => set({ dnsDomains })}
+            placeholder="corp.example.com"
+            summary={domainSummary}
+            unit="个域名"
+          />
+        )}
+      </FormField>
+      <FormField hintAbove label="额外路由" hint="走这个 tailnet 的域名或 IP 段；tailnet 设备和已批准的子网路由会自动识别，不用填">
+        {(id) => (
+          <ListEditor
+            id={id}
+            lines={t.routes}
+            onChange={(routes) => set({ routes })}
+            placeholder={"10.20.0.0/16\nnas.example.com"}
+            summary={ruleSummary}
+            unit="项"
+          />
+        )}
+      </FormField>
+      <ToggleRow
+        checked={t.asProxy}
+        onChange={(asProxy) => set({ asProxy })}
+        title="作为代理出口"
+        description="加入 proxy 选择器，可手动选用；需要在端点里设置 exit_node"
+      />
+    </ItemCard>
   );
 }
+
+const DNS_OPTIONS: { value: RemoteDnsChoice; label: string }[] = [
+  ...Object.entries(REMOTE_DNS).map(([value, p]) => ({ value: value as RemoteDnsChoice, label: `${p.label}（${p.address}）` })),
+  { value: "custom", label: "自定义…" },
+];
+const DNS_PROTOCOLS: { value: RemoteDnsProtocol; label: string }[] = [
+  { value: "tls", label: "DNS over TLS" },
+  { value: "https", label: "DNS over HTTPS" },
+];
 
 function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Settings>) => void }) {
   const { settings: s } = props;
   const set = props.onChange;
   const platform = PLATFORMS.find((p) => p.value === s.platform);
   return (
-    <article className="card">
-      <div className="form-grid">
-        <Field label="目标平台" hint={platform?.note} wide>
-          <select value={s.platform} onChange={(e) => set({ platform: e.target.value as Platform })}>
-            {PLATFORMS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="代理 DNS 服务器" hint="走代理的域名经代理用它解析">
-          <select
-            value={s.remoteDns.provider}
-            onChange={(e) => set({ remoteDns: { ...s.remoteDns, provider: e.target.value as RemoteDnsChoice } })}
-          >
-            {Object.entries(REMOTE_DNS).map(([value, p]) => (
-              <option key={value} value={value}>
-                {p.label}（{p.address}）
-              </option>
-            ))}
-            <option value="custom">自定义…</option>
-          </select>
-        </Field>
-        {s.remoteDns.provider !== "custom" ? (
-          <Field label="协议">
-            <select
-              value={s.remoteDns.protocol}
-              onChange={(e) => set({ remoteDns: { ...s.remoteDns, protocol: e.target.value as RemoteDnsProtocol } })}
-            >
-              <option value="tls">DNS over TLS</option>
-              <option value="https">DNS over HTTPS</option>
-            </select>
-          </Field>
-        ) : (
-          <div className="field wide">
-            <span className="field-label">自定义 DNS 服务器（JSON，可写注释；tag 由生成器填写，默认经 proxy 访问）</span>
-            <CodeEditor
-              value={s.remoteDns.custom}
-              onChange={(custom) => set({ remoteDns: { ...s.remoteDns, custom } })}
-              minRows={6}
-              maxRows={14}
-            />
-          </div>
-        )}
-        <Field label="ECS 网段" hint="随查询发给代理 DNS 的 EDNS Client Subnet。留空时按代理服务器位置返回结果，通常更合适" wide>
-          <input
-            value={s.clientSubnet}
-            placeholder="留空（推荐）"
-            spellCheck={false}
-            onChange={(e) => set({ clientSubnet: e.target.value.trim() })}
-          />
-        </Field>
-        <Field label="Clash API 监听地址" hint="留空则不开启">
-          <input
-            value={s.clashController}
-            placeholder="127.0.0.1:9090"
-            spellCheck={false}
-            onChange={(e) => set({ clashController: e.target.value.trim() })}
-          />
-        </Field>
-        <Field label="Clash API secret">
-          <Secret value={s.clashSecret} onChange={(clashSecret) => set({ clashSecret })} />
-        </Field>
-        <label className="check wide">
-          <input type="checkbox" checked={s.steam} onChange={(e) => set({ steam: e.target.checked })} />
-          <span>
-            Steam<span className="muted">（局域网缓存 lancache 用本地 DNS 解析；Non-CN 模式下 Steam 下载直连）</span>
-          </span>
-        </label>
-        <label className="check wide">
-          <input type="checkbox" checked={s.blockIcloudQuic} onChange={(e) => set({ blockIcloudQuic: e.target.checked })} />
-          <span>
-            禁止 iCloud 使用 QUIC<span className="muted">（拒绝到 gateway.icloud.com 的 UDP 443，让它改用 TCP）</span>
-          </span>
-        </label>
-      </div>
-    </article>
+    <>
+      <Panel title="平台">
+        <FormField label="目标平台" hint={platform?.note || undefined}>
+          {(id) => (
+            <SimpleSelect id={id} value={s.platform} options={PLATFORMS} onChange={(platform) => set({ platform })} className="sm:w-1/2" />
+          )}
+        </FormField>
+      </Panel>
+      <Panel title="代理 DNS" description="走代理的域名经代理用它解析；直连的域名始终用本地 DNS。">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="服务器">
+            {(id) => (
+              <SimpleSelect
+                id={id}
+                value={s.remoteDns.provider}
+                options={DNS_OPTIONS}
+                onChange={(provider) => set({ remoteDns: { ...s.remoteDns, provider } })}
+              />
+            )}
+          </FormField>
+          {s.remoteDns.provider !== "custom" ? (
+            <FormField label="协议">
+              {(id) => (
+                <SimpleSelect
+                  id={id}
+                  value={s.remoteDns.protocol}
+                  options={DNS_PROTOCOLS}
+                  onChange={(protocol) => set({ remoteDns: { ...s.remoteDns, protocol } })}
+                />
+              )}
+            </FormField>
+          ) : (
+            <FormField hintAbove label="自定义 DNS 服务器" hint="sing-box DNS 服务器 JSON，可写注释；tag 由生成器填写，默认经 proxy 访问" wide>
+              {(id) => (
+                <CodeEditor
+                  id={id}
+                  value={s.remoteDns.custom}
+                  onChange={(custom) => set({ remoteDns: { ...s.remoteDns, custom } })}
+                  minRows={6}
+                  maxRows={14}
+                />
+              )}
+            </FormField>
+          )}
+          <FormField label="ECS 网段" hint="随查询发给代理 DNS 的 EDNS Client Subnet。留空时按代理服务器位置返回结果，通常更合适" wide>
+            {(id) => (
+              <Input
+                id={id}
+                className="font-mono"
+                value={s.clientSubnet}
+                placeholder="留空（推荐）"
+                spellCheck={false}
+                onChange={(e) => set({ clientSubnet: e.target.value.trim() })}
+              />
+            )}
+          </FormField>
+        </div>
+      </Panel>
+      <Panel title="Clash API" description="供面板或脚本查看连接、切换节点和模式。">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="监听地址" hint="留空则不开启">
+            {(id) => (
+              <Input
+                id={id}
+                className="font-mono"
+                value={s.clashController}
+                placeholder="127.0.0.1:9090"
+                spellCheck={false}
+                onChange={(e) => set({ clashController: e.target.value.trim() })}
+              />
+            )}
+          </FormField>
+          <FormField label="secret">{(id) => <Secret id={id} value={s.clashSecret} onChange={(clashSecret) => set({ clashSecret })} />}</FormField>
+        </div>
+      </Panel>
+      <Panel title="可选规则">
+        <ToggleRow
+          checked={s.steam}
+          onChange={(steam) => set({ steam })}
+          title="Steam"
+          description="局域网缓存 lancache 用本地 DNS 解析；Non-CN 模式下 Steam 下载直连"
+        />
+        <ToggleRow
+          checked={s.blockIcloudQuic}
+          onChange={(blockIcloudQuic) => set({ blockIcloudQuic })}
+          title="禁止 iCloud 使用 QUIC"
+          description="拒绝到 gateway.icloud.com 的 UDP 443，让它改用 TCP"
+        />
+      </Panel>
+    </>
   );
 }
 
@@ -1169,21 +1353,25 @@ export default function App() {
             </TabsList>
           </div>
 
-          <section className="pane" aria-label={TABS.find((t) => t.id === tab)?.label}>
+          <section className="flex min-w-0 flex-col gap-3" aria-label={TABS.find((t) => t.id === tab)?.label}>
             {sectionIssues(tab).length > 0 && <IssueList issues={sectionIssues(tab)} />}
+
             {tab === "nodes" && (
               <>
-                <div className="pane-head">
-                  <p className="muted">
-                    每个节点是一段 sing-box 出站配置。选择协议模板添加，或
-                    <button type="button" className="link" onClick={() => fileInput.current?.click()}>
-                      从现有的 sing-box 配置导入
-                    </button>
-                    。
-                  </p>
+                <SectionHead
+                  description={
+                    <>
+                      每个节点是一段 sing-box 出站配置。选择协议模板添加，或
+                      <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => fileInput.current?.click()}>
+                        从现有的 sing-box 配置导入
+                      </button>
+                      。
+                    </>
+                  }
+                >
                   <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
-                </div>
-                {profile.nodes.length === 0 && <p className="empty">还没有节点：选择协议模板，点击「添加节点」。</p>}
+                </SectionHead>
+                {profile.nodes.length === 0 && <Empty>还没有节点：选择协议模板，点击「添加节点」。</Empty>}
                 {profile.nodes.map((n, i) => (
                   <NodeCard
                     key={n.id}
@@ -1203,39 +1391,39 @@ export default function App() {
 
             {tab === "groups" && (
               <>
-                <div className="pane-head">
-                  <p className="muted">
-                    所有走代理的流量都经过 <span className="mono">proxy</span>：可以选 <span className="mono">auto</span>（全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
-                  </p>
-                  <button type="button" className="primary" onClick={addGroup}>
+                <SectionHead
+                  description={
+                    <>
+                      所有走代理的流量都经过 <span className="font-mono">proxy</span>：可以选 <span className="font-mono">auto</span>
+                      （全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
+                    </>
+                  }
+                >
+                  <Button onClick={addGroup}>
+                    <Plus />
                     添加代理组
-                  </button>
-                </div>
-                <article className="card">
-                  <div className="form-grid">
-                    <Field label="proxy 默认选择" hint="客户端第一次启动时使用">
-                      <select value={profile.settings.proxyDefault} onChange={(e) => setSettings({ proxyDefault: e.target.value })}>
-                        <option value="auto">auto（全部节点自动测速）</option>
-                        {profile.groups.map((g) => (
-                          <option key={g.id} value={g.id}>
-                            {g.tag}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <label className="check wide">
-                      <input
-                        type="checkbox"
-                        checked={profile.settings.listNodesInProxy}
-                        onChange={(e) => setSettings({ listNodesInProxy: e.target.checked })}
+                  </Button>
+                </SectionHead>
+                <Panel title="proxy 选择器">
+                  <FormField label="默认选择" hint="客户端第一次启动时使用">
+                    {(id) => (
+                      <SimpleSelect
+                        id={id}
+                        value={profile.settings.proxyDefault}
+                        options={[{ value: "auto", label: "auto（全部节点自动测速）" }, ...profile.groups.map((g) => ({ value: g.id, label: g.tag }))]}
+                        onChange={(proxyDefault) => setSettings({ proxyDefault })}
+                        className="sm:w-1/2"
                       />
-                      <span>
-                        在 proxy 里逐个列出节点<span className="muted">（节点多时可以关掉，客户端里只显示 auto 和各代理组）</span>
-                      </span>
-                    </label>
-                  </div>
-                </article>
-                {profile.groups.length === 0 && <p className="empty">还没有代理组。节点不多时不需要，直接用 auto 或手动选节点即可。</p>}
+                    )}
+                  </FormField>
+                  <ToggleRow
+                    checked={profile.settings.listNodesInProxy}
+                    onChange={(listNodesInProxy) => setSettings({ listNodesInProxy })}
+                    title="逐个列出节点"
+                    description="节点多时可以关掉，客户端里只显示 auto 和各代理组"
+                  />
+                </Panel>
+                {profile.groups.length === 0 && <Empty>还没有代理组。节点不多时不需要，直接用 auto 或手动选节点即可。</Empty>}
                 {profile.groups.map((g, i) => (
                   <GroupCard
                     key={g.id}
@@ -1255,13 +1443,13 @@ export default function App() {
 
             {tab === "tailscale" && (
               <>
-                <div className="pane-head">
-                  <p className="muted">需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。</p>
-                  <button type="button" className="primary" onClick={addTailnet}>
+                <SectionHead description="需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。">
+                  <Button onClick={addTailnet}>
+                    <Plus />
                     添加 tailnet
-                  </button>
-                </div>
-                {tailnets.length === 0 && <p className="empty">未使用 Tailscale。</p>}
+                  </Button>
+                </SectionHead>
+                {tailnets.length === 0 && <Empty>未使用 Tailscale。</Empty>}
                 {tailnets.map((t, i) => (
                   <TailnetCard
                     key={t.id}
