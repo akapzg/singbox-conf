@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Platform, Profile, ProxyNode, RemoteDnsProtocol, RemoteDnsProvider, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
-import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate } from "./generate";
+import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
 import { freshTag, newNode, newTailnet } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, normalizeProfile, saveStore, type Store } from "./storage";
 
@@ -61,73 +61,131 @@ function Secret(props: { value: string; onChange: (v: string) => void; placehold
   );
 }
 
+function IssueList(props: { issues: Issue[] }) {
+  if (!props.issues.length) return null;
+  return (
+    <ul className="inline-issues">
+      {props.issues.map((i, k) => (
+        <li key={k} className={i.level}>
+          {i.detail}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function IssueBadge(props: { issues: Issue[] }) {
+  const errors = props.issues.filter((i) => i.level === "error").length;
+  const warnings = props.issues.length - errors;
+  if (errors) return <span className="badge error">{errors} 个错误</span>;
+  if (warnings) return <span className="badge warning">{warnings} 条提醒</span>;
+  return null;
+}
+
 function NodeCard(props: {
   node: ProxyNode;
   index: number;
   count: number;
+  issues: Issue[];
+  expanded: boolean;
+  onToggle: () => void;
   onChange: (n: ProxyNode) => void;
   onRemove: () => void;
   onMove: (delta: number) => void;
 }) {
   const { node: n } = props;
   const set = (patch: Partial<ProxyNode>) => props.onChange({ ...n, ...patch });
-  const { object, endpoint, error } = nodeObject(n);
+  const { object, endpoint } = nodeObject(n);
+  const server = object && typeof object.server === "string" ? `${object.server}${object.server_port ? `:${object.server_port}` : ""}` : "";
   return (
-    <article className="card">
-      <header className="card-head">
-        <div>
-          <h3>{n.tag || "未命名节点"}</h3>
-          <p className="muted mono">
-            {object ? `${String(object.type)}${endpoint ? "（端点）" : ""}` : "未识别"}
-            {n.inGroups ? "" : " · 不在代理组中"}
-          </p>
-        </div>
+    <article className={`card node${props.expanded ? " open" : ""}`} id={`item-${n.id}`}>
+      <div className="card-summary">
+        <button type="button" className="summary-toggle" aria-expanded={props.expanded} onClick={props.onToggle}>
+          <span className="chevron" aria-hidden="true" />
+          <span className="summary-main">
+            <span className="summary-title">{n.tag || "未命名节点"}</span>
+            <span className="summary-meta mono">
+              {object ? String(object.type) : "未识别"}
+              {server && ` · ${server}`}
+            </span>
+          </span>
+          <span className="summary-badges">
+            {endpoint && <span className="badge">端点</span>}
+            {!n.inGroups && <span className="badge">不在代理组</span>}
+            <IssueBadge issues={props.issues} />
+          </span>
+        </button>
         <div className="card-actions">
-          <button type="button" className="ghost small" disabled={props.index === 0} onClick={() => props.onMove(-1)} aria-label="上移">
+          <button type="button" className="icon" disabled={props.index === 0} onClick={() => props.onMove(-1)} aria-label="上移" title="上移">
             ↑
           </button>
           <button
             type="button"
-            className="ghost small"
+            className="icon"
             disabled={props.index === props.count - 1}
             onClick={() => props.onMove(1)}
             aria-label="下移"
+            title="下移"
           >
             ↓
           </button>
           <button
             type="button"
-            className="ghost small danger"
+            className="icon danger"
+            aria-label={`删除节点 ${n.tag}`}
+            title="删除"
             onClick={() => {
               if (confirm(`删除节点「${n.tag || "未命名"}」？`)) props.onRemove();
             }}
           >
-            删除
+            ✕
           </button>
         </div>
-      </header>
-      <Field label="标签" hint="出站标签，也是在客户端里看到的节点名" wide>
-        <input value={n.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
-      </Field>
-      <div className="field">
-        <span className="field-label">节点配置（JSON，可写注释；tag 由生成器填写）</span>
-        <textarea
-          className="mono"
-          rows={Math.min(24, Math.max(6, n.body.split("\n").length + 1))}
-          value={n.body}
-          spellCheck={false}
-          autoComplete="off"
-          onChange={(e) => set({ body: e.target.value })}
-        />
-        {error && <p className="invalid">{error}</p>}
       </div>
-      <label className="check">
-        <input type="checkbox" checked={n.inGroups} onChange={(e) => set({ inGroups: e.target.checked })} />
-        <span>
-          加入代理组<span className="muted">（出现在 proxy 选择器和 auto 自动测速中；只作为其他节点 detour 的可以不勾）</span>
-        </span>
-      </label>
+      {props.expanded && (
+        <div className="card-body">
+          <IssueList issues={props.issues} />
+          <Field label="标签" hint="出站标签，也是在客户端里看到的节点名" wide>
+            <input value={n.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
+          </Field>
+          <div className="field">
+            <span className="field-label">节点配置（JSON，可写注释；tag 由生成器填写）</span>
+            <CodeEditor value={n.body} onChange={(body) => set({ body })} />
+          </div>
+          <label className="check">
+            <input type="checkbox" checked={n.inGroups} onChange={(e) => set({ inGroups: e.target.checked })} />
+            <span>
+              加入代理组<span className="muted">（出现在 proxy 选择器和 auto 自动测速中；只作为其他节点 detour 的可以不勾）</span>
+            </span>
+          </label>
+        </div>
+      )}
     </article>
+  );
+}
+
+/** Textarea for JSON with comments: Tab indents instead of leaving the field. */
+function CodeEditor(props: { value: string; onChange: (v: string) => void; minRows?: number; maxRows?: number }) {
+  const lines = props.value.split("\n").length;
+  return (
+    <textarea
+      className="mono code-input"
+      rows={Math.min(props.maxRows ?? 24, Math.max(props.minRows ?? 6, lines + 1))}
+      value={props.value}
+      spellCheck={false}
+      autoComplete="off"
+      autoCapitalize="off"
+      onChange={(e) => props.onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key !== "Tab" || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+        e.preventDefault();
+        const t = e.currentTarget;
+        const { selectionStart: a, selectionEnd: b, value } = t;
+        const next = `${value.slice(0, a)}  ${value.slice(b)}`;
+        props.onChange(next);
+        requestAnimationFrame(() => t.setSelectionRange(a + 2, a + 2));
+      }}
+    />
   );
 }
 
@@ -210,14 +268,9 @@ function RoutingCard(props: { settings: Settings; onChange: (patch: Partial<Sett
   const { settings: s } = props;
   return (
     <article className="card">
-      <header className="card-head">
-        <div>
-          <h3>分流</h3>
-          <p className="muted">
-            每行一项，域名同时匹配所有子域名；<span className="mono">#</span> 之后为注释。
-          </p>
-        </div>
-      </header>
+      <p className="muted">
+        列表每行一项，域名同时匹配所有子域名；<span className="mono">#</span> 之后为注释。
+      </p>
       <Field label="默认模式" hint="启动时使用的模式，运行中可在客户端或 Clash API 中切换" wide>
         <select value={s.defaultMode} onChange={(e) => props.onChange({ defaultMode: e.target.value as Settings["defaultMode"] })}>
           {MODES.map((m) => (
@@ -251,45 +304,58 @@ function RoutingCard(props: { settings: Settings; onChange: (patch: Partial<Sett
   );
 }
 
-function TailnetCard(props: { tailnet: Tailnet; onChange: (t: Tailnet) => void; onRemove: () => void }) {
+function TailnetCard(props: {
+  tailnet: Tailnet;
+  issues: Issue[];
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: (t: Tailnet) => void;
+  onRemove: () => void;
+}) {
   const { tailnet: t } = props;
   const set = (patch: Partial<Tailnet>) => props.onChange({ ...t, ...patch });
-  const { error } = tailnetEndpoint(t);
+  const { endpoint } = tailnetEndpoint(t);
+  const host = endpoint && typeof endpoint.hostname === "string" ? endpoint.hostname : "";
   return (
-    <article className="card">
-      <header className="card-head">
-        <div>
-          <h3>{t.tag || "未命名 tailnet"}</h3>
-          <p className="muted mono">
-            endpoint: {t.tag}
-            {(t.magicDns || t.dnsDomains.some((l) => l.trim())) && ` · dns: ${t.tag}-dns`}
-          </p>
-        </div>
+    <article className={`card node${props.expanded ? " open" : ""}`} id={`item-${t.id}`}>
+      <div className="card-summary">
+        <button type="button" className="summary-toggle" aria-expanded={props.expanded} onClick={props.onToggle}>
+          <span className="chevron" aria-hidden="true" />
+          <span className="summary-main">
+            <span className="summary-title">{t.tag || "未命名 tailnet"}</span>
+            <span className="summary-meta mono">
+              tailscale{host && ` · ${host}`}
+              {(t.magicDns || t.dnsDomains.some((l) => l.trim())) && ` · dns: ${t.tag}-dns`}
+            </span>
+          </span>
+          <span className="summary-badges">
+            {t.asProxy && <span className="badge">代理出口</span>}
+            <IssueBadge issues={props.issues} />
+          </span>
+        </button>
         <div className="card-actions">
           <button
             type="button"
-            className="ghost small danger"
+            className="icon danger"
+            aria-label={`删除 tailnet ${t.tag}`}
+            title="删除"
             onClick={() => {
               if (confirm(`删除 tailnet「${t.tag || "未命名"}」？`)) props.onRemove();
             }}
           >
-            删除
+            ✕
           </button>
         </div>
-      </header>
+      </div>
+      {props.expanded && (
+      <div className="card-body">
+      <IssueList issues={props.issues} />
       <Field label="标签" hint="端点的标签；DNS 服务器会命名为「标签-dns」" wide>
         <input value={t.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
       </Field>
       <div className="field">
         <span className="field-label">端点配置（JSON，可写注释；type 和 tag 由生成器填写）</span>
-        <textarea
-          className="mono"
-          rows={Math.min(16, Math.max(6, t.endpoint.split("\n").length + 1))}
-          value={t.endpoint}
-          spellCheck={false}
-          onChange={(e) => set({ endpoint: e.target.value })}
-        />
-        {error && <p className="invalid">JSON 有误：{error}</p>}
+        <CodeEditor value={t.endpoint} onChange={(endpoint) => set({ endpoint })} maxRows={16} />
       </div>
       <label className="check">
         <input type="checkbox" checked={t.magicDns} onChange={(e) => set({ magicDns: e.target.checked })} />
@@ -333,6 +399,8 @@ function TailnetCard(props: { tailnet: Tailnet; onChange: (t: Tailnet) => void; 
           作为代理出口<span className="muted">（加入 proxy 选择器，可手动选用；需要在端点里设置 exit_node）</span>
         </span>
       </label>
+      </div>
+      )}
     </article>
   );
 }
@@ -342,10 +410,7 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
   const set = props.onChange;
   const platform = PLATFORMS.find((p) => p.value === s.platform);
   return (
-    <details className="card settings">
-      <summary>
-        <h3>平台与高级设置</h3>
-      </summary>
+    <article className="card">
       <div className="grid">
         <Field label="目标平台" hint={platform?.note} wide>
           <select value={s.platform} onChange={(e) => set({ platform: e.target.value as Platform })}>
@@ -409,7 +474,7 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
           </span>
         </label>
       </div>
-    </details>
+    </article>
   );
 }
 
@@ -419,79 +484,96 @@ function uniqueName(name: string, store: Store): string {
   for (let i = 2; ; i++) if (!names.includes(`${name} ${i}`)) return `${name} ${i}`;
 }
 
-/** Switch, add, copy, rename and delete the profiles kept in this browser. */
-function ProfileBar(props: { store: Store; onChange: (s: Store) => void; onAdd: (name: string, p?: Profile) => void }) {
-  const { store } = props;
-  const active = store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
-  const ask = (message: string, initial: string) => {
-    const name = prompt(message, initial)?.trim();
-    return name || null;
-  };
+/** Small dropdown menu; closes on outside click and Escape. */
+function Menu(props: { label: string; children: (close: () => void) => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
   return (
-    <div className="row profile-bar">
-      <select
-        value={active.id}
-        aria-label="当前配置"
-        onChange={(e) => props.onChange({ ...store, activeId: e.target.value })}
-      >
-        {store.profiles.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        className="ghost small"
-        onClick={() => {
-          const name = ask("新配置的名称（从示例开始）", uniqueName("新配置", store));
-          if (name) props.onAdd(uniqueName(name, store));
-        }}
-      >
-        新建
+    <div className="menu" ref={ref}>
+      <button type="button" className="ghost" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {props.label}
       </button>
-      <button
-        type="button"
-        className="ghost small"
-        onClick={() => {
-          const name = ask("副本的名称", uniqueName(`${active.name} 副本`, store));
-          if (name) props.onAdd(uniqueName(name, store), structuredClone(active.profile));
-        }}
-      >
-        复制
-      </button>
-      <button
-        type="button"
-        className="ghost small"
-        onClick={() => {
-          const name = ask("重命名为", active.name);
-          if (name && name !== active.name) {
-            const unique = uniqueName(name, store);
-            props.onChange({ ...store, profiles: store.profiles.map((p) => (p.id === active.id ? { ...p, name: unique } : p)) });
-          }
-        }}
-      >
-        重命名
-      </button>
-      <button
-        type="button"
-        className="ghost small danger"
-        disabled={store.profiles.length < 2}
-        onClick={() => {
-          if (!confirm(`删除配置「${active.name}」？`)) return;
-          const profiles = store.profiles.filter((p) => p.id !== active.id);
-          props.onChange({ activeId: profiles[0].id, profiles });
-        }}
-      >
-        删除
-      </button>
+      {open && (
+        <div className="menu-pop" role="menu">
+          {props.children(() => setOpen(false))}
+        </div>
+      )}
     </div>
   );
+}
+
+function MenuItem(props: { onSelect: () => void; danger?: boolean; disabled?: boolean; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={props.danger ? "menu-item danger" : "menu-item"}
+      disabled={props.disabled}
+      onClick={props.onSelect}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+type Tab = "nodes" | "routing" | "tailscale" | "settings";
+const TABS: { id: Tab; label: string }[] = [
+  { id: "nodes", label: "节点" },
+  { id: "routing", label: "分流" },
+  { id: "tailscale", label: "Tailscale" },
+  { id: "settings", label: "高级" },
+];
+const TAB_KEY = "singbox-gen:tab";
+
+function loadTab(): Tab {
+  try {
+    const t = localStorage.getItem(TAB_KEY);
+    if (TABS.some((x) => x.id === t)) return t as Tab;
+  } catch {
+    // Storage blocked: start on the first tab.
+  }
+  return "nodes";
+}
+
+/** JSON with keys, strings, numbers and literals wrapped for colouring. */
+function highlightJson(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    const cls = m[1] ? (m[2] ? "tok-key" : "tok-str") : m[3] ? "tok-lit" : "tok-num";
+    out.push(
+      <span key={m.index} className={cls}>
+        {m[1] ?? m[0]}
+      </span>,
+    );
+    if (m[2]) out.push(m[2]);
+    last = re.lastIndex;
+  }
+  out.push(text.slice(last));
+  return out;
 }
 
 export default function App() {
   const [store, setStore] = useState<Store>(loadStore);
   const [toast, setToast] = useState("");
+  const [tab, setTabState] = useState<Tab>(loadTab);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [showWarnings, setShowWarnings] = useState(false);
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const active = store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
   const profile = active.profile;
@@ -500,6 +582,21 @@ export default function App() {
       ...s,
       profiles: s.profiles.map((x) => (x.id === s.activeId ? { ...x, profile: update(x.profile) } : x)),
     }));
+  const setTab = (t: Tab) => {
+    setTabState(t);
+    try {
+      localStorage.setItem(TAB_KEY, t);
+    } catch {
+      // Ignore: only a convenience.
+    }
+  };
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => saveStore(store), [store]);
   useEffect(() => {
@@ -507,10 +604,38 @@ export default function App() {
     const t = setTimeout(() => setToast(""), 2000);
     return () => clearTimeout(t);
   }, [toast]);
+  // After navigating to a card, bring it into view and flash it.
+  useEffect(() => {
+    if (!scrollTo) return;
+    const el = document.getElementById(`item-${scrollTo}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.remove("flash");
+      void el.offsetWidth;
+      el.classList.add("flash");
+    }
+    setScrollTo(null);
+  }, [scrollTo, tab, expanded]);
 
   const issues = useMemo(() => validate(profile), [profile]);
   const configText = useMemo(() => JSON.stringify(generateConfig(profile), null, 2), [profile]);
+  const highlighted = useMemo(() => highlightJson(configText), [configText]);
   const errors = issues.filter((i) => i.level === "error");
+  const warnings = issues.filter((i) => i.level === "warning");
+  const issuesFor = (id: string) => issues.filter((i) => i.id === id);
+  const sectionIssues = (section: Tab) => issues.filter((i) => i.section === section && !i.id);
+  const tabState = (section: Tab) => {
+    const list = issues.filter((i) => i.section === section);
+    return list.some((i) => i.level === "error") ? "error" : list.length ? "warning" : "";
+  };
+
+  const goTo = (i: Issue) => {
+    setTab(i.section);
+    if (i.id) {
+      setExpanded((prev) => new Set(prev).add(i.id!));
+      setScrollTo(i.id);
+    }
+  };
 
   const setSettings = (patch: Partial<Settings>) => setProfile((p) => ({ ...p, settings: { ...p.settings, ...patch } }));
   const updateNode = (i: number, n: ProxyNode) => setProfile((p) => ({ ...p, nodes: p.nodes.map((x, j) => (j === i ? n : x)) }));
@@ -522,53 +647,133 @@ export default function App() {
       nodes.splice(i + delta, 0, n);
       return { ...p, nodes };
     });
+  const addNode = (n: ProxyNode) => {
+    setProfile((p) => ({ ...p, nodes: [...p.nodes, n] }));
+    setExpanded((prev) => new Set(prev).add(n.id));
+    setScrollTo(n.id);
+  };
+  const addTailnet = () => {
+    const tailnets = profile.settings.tailnets;
+    const t = newTailnet({ tag: tailnets.length ? `ts${tailnets.length + 1}` : "ts" });
+    setSettings({ tailnets: [...tailnets, t] });
+    setExpanded((prev) => new Set(prev).add(t.id));
+    setScrollTo(t.id);
+  };
 
   const addProfile = (name: string, p?: Profile) => {
     const saved = newSavedProfile(name, p);
     setStore((s) => ({ activeId: saved.id, profiles: [...s.profiles, saved] }));
   };
+  const askName = (message: string, initial: string) => prompt(message, initial)?.trim() || null;
 
   const importProfile = async (file: File) => {
     try {
       const raw = JSON.parse(await file.text());
-      const name = typeof raw?.name === "string" && raw.name ? raw.name : file.name.replace(/\.json$/i, "");
-      addProfile(uniqueName(name, store), normalizeProfile(raw));
+      const name = uniqueName(typeof raw?.name === "string" && raw.name ? raw.name : file.name.replace(/\.json$/i, ""), store);
+      addProfile(name, normalizeProfile(raw));
       setToast(`已导入为「${name}」`);
     } catch (e) {
       alert(`导入失败：${(e as Error).message}`);
     }
   };
 
+  const tailnets = profile.settings.tailnets;
+
   return (
     <div className="app">
       <header className="top">
-        <div>
+        <div className="brand">
           <h1>sing-box 配置生成器</h1>
-          <p className="muted">纯前端运行，所有配置只保存在当前浏览器，不会上传到任何地方。需要 sing-box 1.14 及以上。</p>
+          <p className="muted">纯前端运行，配置只保存在这个浏览器里。适用于 sing-box 1.14 及以上。</p>
         </div>
         <div className="top-actions">
-          <ProfileBar store={store} onChange={setStore} onAdd={addProfile} />
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => download(`singbox-confgen-${active.name.replace(/[\\/:*?"<>|]/g, "-")}.json`, JSON.stringify({ name: active.name, ...profile }, null, 2))}
-          >
-            导出
-          </button>
-          <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
-            导入
-          </button>
-          <button
-            type="button"
-            className="ghost danger"
-            onClick={() => {
-              if (!confirm("清除本浏览器保存的全部配置，并恢复为示例？")) return;
-              clearStore();
-              setStore(defaultStore());
-            }}
-          >
-            清除本地数据
-          </button>
+          <label className="profile-select">
+            <span className="field-label">配置</span>
+            <select value={active.id} onChange={(e) => setStore({ ...store, activeId: e.target.value })}>
+              {store.profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Menu label="⋯ 管理">
+            {(close) => (
+              <>
+                <MenuItem
+                  onSelect={() => {
+                    close();
+                    const name = askName("新配置的名称（从示例开始）", uniqueName("新配置", store));
+                    if (name) addProfile(uniqueName(name, store));
+                  }}
+                >
+                  新建配置
+                </MenuItem>
+                <MenuItem
+                  onSelect={() => {
+                    close();
+                    const name = askName("副本的名称", uniqueName(`${active.name} 副本`, store));
+                    if (name) addProfile(uniqueName(name, store), structuredClone(profile));
+                  }}
+                >
+                  复制当前配置
+                </MenuItem>
+                <MenuItem
+                  onSelect={() => {
+                    close();
+                    const name = askName("重命名为", active.name);
+                    if (name && name !== active.name) {
+                      const unique = uniqueName(name, store);
+                      setStore({ ...store, profiles: store.profiles.map((p) => (p.id === active.id ? { ...p, name: unique } : p)) });
+                    }
+                  }}
+                >
+                  重命名…
+                </MenuItem>
+                <hr />
+                <MenuItem
+                  onSelect={() => {
+                    close();
+                    download(`singbox-confgen-${active.name.replace(/[\\/:*?"<>|]/g, "-")}.json`, JSON.stringify({ name: active.name, ...profile }, null, 2));
+                  }}
+                >
+                  导出当前配置（含密码）
+                </MenuItem>
+                <MenuItem
+                  onSelect={() => {
+                    close();
+                    fileInput.current?.click();
+                  }}
+                >
+                  导入配置…
+                </MenuItem>
+                <hr />
+                <MenuItem
+                  danger
+                  disabled={store.profiles.length < 2}
+                  onSelect={() => {
+                    close();
+                    if (!confirm(`删除配置「${active.name}」？`)) return;
+                    const profiles = store.profiles.filter((p) => p.id !== active.id);
+                    setStore({ activeId: profiles[0].id, profiles });
+                  }}
+                >
+                  删除当前配置
+                </MenuItem>
+                <MenuItem
+                  danger
+                  onSelect={() => {
+                    close();
+                    if (!confirm("清除这个浏览器里保存的全部配置，并恢复为示例？")) return;
+                    clearStore();
+                    setStore(defaultStore());
+                  }}
+                >
+                  清除全部本地数据
+                </MenuItem>
+              </>
+            )}
+          </Menu>
           <input
             ref={fileInput}
             type="file"
@@ -585,59 +790,84 @@ export default function App() {
 
       <main className="layout">
         <section className="pane">
-          <div className="pane-head">
-            <h2>节点</h2>
-            <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={(n) => setProfile((p) => ({ ...p, nodes: [...p.nodes, n] }))} />
-          </div>
-          {profile.nodes.length === 0 && <p className="empty">还没有节点：选择协议模板，点击「添加节点」。</p>}
-          {profile.nodes.map((n, i) => (
-            <NodeCard
-              key={n.id}
-              node={n}
-              index={i}
-              count={profile.nodes.length}
-              onChange={(next) => updateNode(i, next)}
-              onRemove={() => removeNode(i)}
-              onMove={(d) => moveNode(i, d)}
-            />
-          ))}
-          <RoutingCard settings={profile.settings} onChange={setSettings} />
+          <nav className="tabs" role="tablist" aria-label="设置分类">
+            {TABS.map((t) => {
+              const count = t.id === "nodes" ? profile.nodes.length : t.id === "tailscale" ? tailnets.length : null;
+              const state = tabState(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  className={tab === t.id ? "tab active" : "tab"}
+                  onClick={() => setTab(t.id)}
+                >
+                  {t.label}
+                  {count !== null && <span className="tab-count">{count}</span>}
+                  {state && <span className={`dot ${state}`} aria-label={state === "error" ? "有错误" : "有提醒"} />}
+                </button>
+              );
+            })}
+          </nav>
 
-          <div className="pane-head">
-            <h2>Tailscale</h2>
-            <button
-              type="button"
-              className="ghost"
-              onClick={() =>
-                setSettings({
-                  tailnets: [
-                    ...profile.settings.tailnets,
-                    newTailnet({ tag: profile.settings.tailnets.length ? `ts${profile.settings.tailnets.length + 1}` : "ts" }),
-                  ],
-                })
-              }
-            >
-              添加 tailnet
-            </button>
-          </div>
-          {profile.settings.tailnets.length === 0 && (
-            <p className="empty">未使用 Tailscale。需要访问 tailnet 里的设备或内网时，点击「添加 tailnet」。</p>
+          {sectionIssues(tab).length > 0 && <IssueList issues={sectionIssues(tab)} />}
+
+          {tab === "nodes" && (
+            <>
+              <div className="pane-head">
+                <p className="muted">每个节点是一段 sing-box 出站配置。选择协议模板后添加，再填写服务器信息。</p>
+                <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
+              </div>
+              {profile.nodes.length === 0 && <p className="empty">还没有节点：选择协议模板，点击「添加节点」。</p>}
+              {profile.nodes.map((n, i) => (
+                <NodeCard
+                  key={n.id}
+                  node={n}
+                  index={i}
+                  count={profile.nodes.length}
+                  issues={issuesFor(n.id)}
+                  expanded={expanded.has(n.id)}
+                  onToggle={() => toggle(n.id)}
+                  onChange={(next) => updateNode(i, next)}
+                  onRemove={() => removeNode(i)}
+                  onMove={(d) => moveNode(i, d)}
+                />
+              ))}
+            </>
           )}
-          {profile.settings.tailnets.map((t, i) => (
-            <TailnetCard
-              key={t.id}
-              tailnet={t}
-              onChange={(next) => setSettings({ tailnets: profile.settings.tailnets.map((x, j) => (j === i ? next : x)) })}
-              onRemove={() => setSettings({ tailnets: profile.settings.tailnets.filter((_, j) => j !== i) })}
-            />
-          ))}
 
-          <SettingsCard settings={profile.settings} onChange={setSettings} />
+          {tab === "routing" && <RoutingCard settings={profile.settings} onChange={setSettings} />}
+
+          {tab === "tailscale" && (
+            <>
+              <div className="pane-head">
+                <p className="muted">需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。</p>
+                <button type="button" className="primary" onClick={addTailnet}>
+                  添加 tailnet
+                </button>
+              </div>
+              {tailnets.length === 0 && <p className="empty">未使用 Tailscale。</p>}
+              {tailnets.map((t, i) => (
+                <TailnetCard
+                  key={t.id}
+                  tailnet={t}
+                  issues={issuesFor(t.id)}
+                  expanded={expanded.has(t.id)}
+                  onToggle={() => toggle(t.id)}
+                  onChange={(next) => setSettings({ tailnets: tailnets.map((x, j) => (j === i ? next : x)) })}
+                  onRemove={() => setSettings({ tailnets: tailnets.filter((_, j) => j !== i) })}
+                />
+              ))}
+            </>
+          )}
+
+          {tab === "settings" && <SettingsCard settings={profile.settings} onChange={setSettings} />}
         </section>
 
-        <section className="pane output">
+        <section className="pane output" aria-label="生成的配置">
           <div className="pane-head">
-            <h2>生成的配置</h2>
+            <h2>config.json</h2>
             <div className="row">
               <button
                 type="button"
@@ -647,23 +877,43 @@ export default function App() {
                 复制
               </button>
               <button type="button" className="primary" onClick={() => download("config.json", configText)}>
-                下载 config.json
+                下载
               </button>
             </div>
           </div>
-          {issues.length > 0 && (
+
+          <div className={`status ${errors.length ? "error" : warnings.length ? "warning" : "ok"}`} role="status">
+            <strong>
+              {errors.length
+                ? `${errors.length} 个错误：sing-box 可能无法加载这份配置`
+                : warnings.length
+                  ? `可以生成，但有 ${warnings.length} 条提醒`
+                  : "配置完整，可以导入客户端"}
+            </strong>
+            {warnings.length > 0 && (
+              <button type="button" className="link" onClick={() => setShowWarnings(!showWarnings)}>
+                {showWarnings ? "收起提醒" : "查看提醒"}
+              </button>
+            )}
+          </div>
+          {(errors.length > 0 || showWarnings) && (
             <ul className="issues">
-              {issues.map((i, k) => (
+              {[...errors, ...(showWarnings ? warnings : [])].map((i, k) => (
                 <li key={k} className={i.level}>
-                  {i.level === "error" ? "错误" : "提醒"}：{i.message}
+                  <button type="button" className="link" onClick={() => goTo(i)}>
+                    {i.message}
+                  </button>
                 </li>
               ))}
             </ul>
           )}
-          {errors.length > 0 && <p className="muted">存在错误时，sing-box 可能无法加载这份配置。</p>}
-          <pre className="code" tabIndex={0}>
-            {configText}
+
+          <pre className="code" tabIndex={0} aria-label="生成的 config.json">
+            {highlighted}
           </pre>
+          <p className="muted small-print">
+            {configText.split("\n").length} 行 · {(new Blob([configText]).size / 1024).toFixed(1)} KB
+          </p>
         </section>
       </main>
 

@@ -456,9 +456,17 @@ export function generateConfig(profile: Profile): Json {
 // ---------------------------------------------------------------------------
 // Validation
 
+export type IssueSection = "nodes" | "routing" | "tailscale" | "settings";
+
 export interface Issue {
   level: "error" | "warning";
+  /** Full sentence, including which node or tailnet it is about. */
   message: string;
+  /** The same without the node/tailnet prefix, for showing inside its card. */
+  detail: string;
+  section: IssueSection;
+  /** Node or tailnet id the issue belongs to. */
+  id?: string;
 }
 
 const TAG_RE = /^[A-Za-z0-9._-]+$/;
@@ -496,63 +504,76 @@ const RESERVED_TAGS = ["proxy", "auto", "direct", "local", "remote", "tun-in"];
 export function validate(profile: Profile): Issue[] {
   const s = profile.settings;
   const issues: Issue[] = [];
-  const err = (message: string) => issues.push({ level: "error", message });
-  const warn = (message: string) => issues.push({ level: "warning", message });
+  type Where = { section: IssueSection; id?: string; label?: string };
+  const add = (level: Issue["level"], where: Where, detail: string) =>
+    issues.push({ level, detail, message: where.label ? `${where.label}：${detail}` : detail, section: where.section, id: where.id });
+  const err = (where: Where, detail: string) => add("error", where, detail);
+  const warn = (where: Where, detail: string) => add("warning", where, detail);
+  const NODES: Where = { section: "nodes" };
+  const ROUTING: Where = { section: "routing" };
+  const SETTINGS: Where = { section: "settings" };
   const tags = new Map<string, number>();
   const addTag = (t: string) => tags.set(t, (tags.get(t) ?? 0) + 1);
   RESERVED_TAGS.forEach(addTag);
 
   const nodeTags = new Set(profile.nodes.map((n) => n.tag));
   const tailnetTags = new Set(s.tailnets.map((t) => t.tag));
-  if (profile.nodes.length === 0) err("至少需要一个节点");
-  else if (!profile.nodes.some((n) => n.inGroups)) err("至少要有一个节点加入代理组");
+  if (profile.nodes.length === 0) err(NODES, "至少需要一个节点");
+  else if (!profile.nodes.some((n) => n.inGroups)) err(NODES, "至少要有一个节点加入代理组");
   for (const n of profile.nodes) {
-    const label = `节点「${n.tag || "(未命名)"}」`;
-    if (!TAG_RE.test(n.tag)) err(`${label}：标签只能包含字母、数字、. _ -`);
+    const at: Where = { section: "nodes", id: n.id, label: `节点「${n.tag || "(未命名)"}」` };
+    if (!TAG_RE.test(n.tag)) err(at, "标签只能包含字母、数字、. _ -");
     addTag(n.tag);
     const { object, error } = nodeObject(n);
     if (error) {
-      err(`${label}：${error}`);
+      err(at, error);
       continue;
     }
     const o = object!;
-    if (NEEDS_SERVER.includes(String(o.type)) && !o.server) err(`${label}：缺少 server`);
-    if (typeof o.server === "string" && /(^|\.)example\.com$/.test(o.server)) warn(`${label}：server 还是模板里的示例地址`);
-    for (const path of emptySecretPaths(o)) warn(`${label}：${path} 为空，sing-box 可能无法加载`);
+    if (NEEDS_SERVER.includes(String(o.type)) && !o.server) err(at, "缺少 server");
+    if (typeof o.server === "string" && /(^|\.)example\.com$/.test(o.server)) warn(at, "server 还是模板里的示例地址");
+    for (const path of emptySecretPaths(o)) warn(at, `${path} 为空，sing-box 可能无法加载`);
     const ssKeyError = shadowsocks2022KeyError(o);
-    if (ssKeyError) err(`${label}：${ssKeyError}`);
+    if (ssKeyError) err(at, ssKeyError);
     if (typeof o.detour === "string" && !nodeTags.has(o.detour) && !tailnetTags.has(o.detour) && o.detour !== "direct") {
-      err(`${label}：detour 指向的「${o.detour}」不存在`);
+      err(at, `detour 指向的「${o.detour}」不存在`);
     }
   }
 
   const stateDirs = new Map<string, string>();
   for (const t of s.tailnets) {
-    const label = `Tailscale「${t.tag || "(未命名)"}」`;
-    if (!TAG_RE.test(t.tag)) err(`${label}：标签只能包含字母、数字、. _ -`);
+    const at: Where = { section: "tailscale", id: t.id, label: `Tailscale「${t.tag || "(未命名)"}」` };
+    if (!TAG_RE.test(t.tag)) err(at, "标签只能包含字母、数字、. _ -");
     addTag(t.tag);
     if (hasDns(t)) addTag(dnsTag(t));
     const { endpoint, error } = tailnetEndpoint(t);
-    if (error) err(`${label}：端点 JSON 有误：${error}`);
+    if (error) err(at, `端点 JSON 有误：${error}`);
     if (endpoint) {
       const dir = String(endpoint.state_directory ?? "tailscale");
-      if (stateDirs.has(dir)) err(`${label}：state_directory「${dir}」与「${stateDirs.get(dir)}」重复，每个 tailnet 需要独立目录`);
+      if (stateDirs.has(dir)) err(at, `state_directory「${dir}」与「${stateDirs.get(dir)}」重复，每个 tailnet 需要独立目录`);
       stateDirs.set(dir, t.tag);
-      if (t.asProxy && !endpoint.exit_node) warn(`${label}：作为代理出口但没有设置 exit_node，经它的流量只能到达 tailnet 内的地址`);
+      if (t.asProxy && !endpoint.exit_node) warn(at, "作为代理出口但没有设置 exit_node，经它的流量只能到达 tailnet 内的地址");
     }
     const dns = parseDomainList(t.dnsDomains.join("\n"));
-    if (dns.invalid.length) err(`${label}：分域 DNS 域名格式不正确：${dns.invalid.join("、")}`);
+    if (dns.invalid.length) err(at, `分域 DNS 域名格式不正确：${dns.invalid.join("、")}`);
     const routes = parseRuleList(t.routes.join("\n"));
-    if (routes.invalid.length) err(`${label}：额外路由格式不正确：${routes.invalid.join("、")}`);
+    if (routes.invalid.length) err(at, `额外路由格式不正确：${routes.invalid.join("、")}`);
   }
-  for (const [t, n] of tags) if (n > 1) err(`标签重复：${t}`);
+  for (const [t, n] of tags) {
+    if (n < 2) continue;
+    // Point at the first node or tailnet using it, so the card shows the problem.
+    const node = profile.nodes.find((x) => x.tag === t);
+    const tailnet = s.tailnets.find((x) => x.tag === t || dnsTag(x) === t);
+    const where: Where = node ? { section: "nodes", id: node.id } : tailnet ? { section: "tailscale", id: tailnet.id } : NODES;
+    err(where, `标签重复：${t}`);
+  }
 
   const subnet = s.clientSubnet.trim();
-  if (subnet && !parseCidr(subnet.toLowerCase())) err(`ECS 网段格式不正确：${subnet}`);
+  if (subnet && !parseCidr(subnet.toLowerCase())) err(SETTINGS, `ECS 网段格式不正确：${subnet}`);
   const direct = parseDomainList(s.directDomains.join("\n"));
-  if (direct.invalid.length) err(`直连域名格式不正确：${direct.invalid.join("、")}`);
+  if (direct.invalid.length) err(ROUTING, `直连域名格式不正确：${direct.invalid.join("、")}`);
   const proxy = parseRuleList(s.proxyRules.join("\n"));
-  if (proxy.invalid.length) err(`代理域名或 IP 格式不正确：${proxy.invalid.join("、")}`);
-  if (s.clashController.trim() && !s.clashSecret) warn("Clash API 已开启但没有设置 secret");
+  if (proxy.invalid.length) err(ROUTING, `代理域名或 IP 格式不正确：${proxy.invalid.join("、")}`);
+  if (s.clashController.trim() && !s.clashSecret) warn(SETTINGS, "Clash API 已开启但没有设置 secret");
   return issues;
 }
