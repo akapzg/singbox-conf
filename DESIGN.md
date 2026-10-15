@@ -114,6 +114,7 @@
 - 顶栏固定：配置切换、管理菜单、检查结果、预览、复制、下载。检查结果和 config.json 预览都在右侧抽屉里，正文单栏，手机上不需要左右分屏。
 - 深色模式跟随系统（`main.tsx` 切换 `.dark`）。界面全部用 Tailwind 类和 shadcn 组件；`styles.css` 只剩 JSON 高亮、状态颜色、提示条等少量规则。
 - 节点、代理组、tailnet 是可折叠卡片（`ItemCard`），表单统一用 `FormField`（标签 + 控件 + 说明，大编辑框的说明放在上方）和 `ToggleRow`（开关）。代理组成员拖动手柄排序，也可聚焦手柄按 ↑/↓。
+- JSON 编辑框是 CodeMirror 6（`src/code-editor.tsx`）：自写的 JSONC 分词器（`@lezer/json` 不支持注释），行号、括号匹配、撤销、Tab 缩进；解析错误标在出错的位置。`stripComments` 把注释换成等长空白，`JSON.parse` 报的偏移量因此能直接对应原文。域名/IP 列表仍是普通文本框。
 
 ## 7. 已知局限
 

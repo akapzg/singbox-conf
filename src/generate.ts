@@ -102,6 +102,14 @@ export function parseRuleList(text: string): { domains: string[]; cidrs: string[
 
 /** JSON with `//` and `/* *\/` comments (outside strings). */
 export function parseJsonc(text: string): unknown {
+  return JSON.parse(stripComments(text));
+}
+
+/**
+ * JSONC with comments blanked out. Comments become spaces (newlines kept), so offsets in a
+ * JSON.parse error point at the same place in the original text.
+ */
+export function stripComments(text: string): string {
   let out = "";
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -109,17 +117,31 @@ export function parseJsonc(text: string): unknown {
       const start = i;
       for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === "\\") i++;
       out += text.slice(start, i + 1);
-    } else if (c === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-      out += "\n";
-    } else if (c === "/" && text[i + 1] === "*") {
-      const end = text.indexOf("*/", i + 2);
-      i = end < 0 ? text.length : end + 1;
+    } else if (c === "/" && (text[i + 1] === "/" || text[i + 1] === "*")) {
+      // A line comment ends before its newline, a block comment after its "*/"; unclosed ones run to the end.
+      const line = text[i + 1] === "/";
+      const found = line ? text.indexOf("\n", i) : text.indexOf("*/", i + 2);
+      const stop = found < 0 ? text.length : line ? found : found + 2;
+      out += text.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop - 1;
     } else {
       out += c;
     }
   }
-  return JSON.parse(out);
+  return out;
+}
+
+/** Where a JSON.parse error happened, as an offset into the parsed text, when the engine says. */
+export function jsonErrorOffset(message: string, text: string): number | null {
+  const pos = /position (\d+)/.exec(message);
+  if (pos) return Math.min(Number(pos[1]), text.length);
+  const lc = /line (\d+) column (\d+)/.exec(message);
+  if (!lc) return null;
+  const lines = text.split("\n");
+  const line = Math.min(Number(lc[1]), lines.length) - 1;
+  let offset = 0;
+  for (let i = 0; i < line; i++) offset += lines[i].length + 1;
+  return Math.min(offset + Number(lc[2]) - 1, text.length);
 }
 
 /** The endpoint object a tailnet produces, or an error message. */

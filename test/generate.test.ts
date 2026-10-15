@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { generateConfig, nodeObject, parseJsonc, parseRuleList, validate } from "../src/generate";
+import { generateConfig, jsonErrorOffset, nodeObject, parseJsonc, parseRuleList, stripComments, validate } from "../src/generate";
 import { blueprintProfile, newGroup, newNode, newTailnet } from "../src/defaults";
 import { normalizeProfile } from "../src/storage";
 import { TEMPLATES, NODE_TYPES } from "../src/templates";
@@ -590,5 +590,32 @@ describe("validate", () => {
     const msgs = validate(p).map((i) => i.message).join("\n");
     expect(msgs).toContain("ECS");
     expect(msgs).toContain("代理域名或 IP");
+  });
+});
+
+describe("JSONC", () => {
+  it("blanks comments without moving anything", () => {
+    for (const text of ['{"a": 1 // note\n}', '{/* x */"a": "//not a comment"}', '{"a": 1} /* unclosed', "// only\n{}"]) {
+      const stripped = stripComments(text);
+      expect(stripped).toHaveLength(text.length);
+      expect(stripped.split("\n").length).toBe(text.split("\n").length);
+      expect(() => JSON.parse(stripped)).not.toThrow();
+    }
+    expect(parseJsonc('{/* x */"a": "//not a comment"}')).toEqual({ a: "//not a comment" });
+  });
+
+  it("locates parse errors in the original text", () => {
+    const text = '{\n  // trailing comma\n  "a": 1,\n}';
+    const stripped = stripComments(text);
+    let message = "";
+    try {
+      JSON.parse(stripped);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(text.slice(jsonErrorOffset(message, stripped)!)).toBe("}");
+    // Engines that report line and column instead of an offset.
+    expect(jsonErrorOffset("Unexpected token at line 4 column 1", text)).toBe(text.length - 1);
+    expect(jsonErrorOffset("JSON Parse error: Unexpected EOF", text)).toBeNull();
   });
 });

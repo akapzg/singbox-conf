@@ -6,6 +6,7 @@ import { freshTag, newGroup, newNode, newTailnet } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
+import { CodeEditor } from "./code-editor";
 import {
   ArrowDown,
   ArrowUp,
@@ -88,7 +89,9 @@ function FormField(props: { label: ReactNode; hint?: ReactNode; hintAbove?: bool
   const hint = props.hint && <FieldDescription className={props.hintAbove ? "-mt-1" : undefined}>{props.hint}</FieldDescription>;
   return (
     <Field className={props.wide ? "sm:col-span-2" : undefined}>
-      <FieldLabel htmlFor={id}>{props.label}</FieldLabel>
+      <FieldLabel id={`${id}-label`} htmlFor={id}>
+        {props.label}
+      </FieldLabel>
       {props.hintAbove && hint}
       {props.children(id)}
       {!props.hintAbove && hint}
@@ -299,7 +302,7 @@ function NodeCard(props: {
         {(id) => <Input id={id} className="font-mono" value={n.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />}
       </FormField>
       <FormField hintAbove label="节点配置" hint="sing-box 出站 JSON，可写注释；tag 由生成器填写">
-        {(id) => <CodeEditor id={id} value={n.body} onChange={(body) => set({ body })} />}
+        {(id) => <CodeEditor labelledBy={`${id}-label`} value={n.body} onChange={(body) => set({ body })} />}
       </FormField>
       <ToggleRow
         checked={n.inGroups}
@@ -308,32 +311,6 @@ function NodeCard(props: {
         description="出现在 proxy 选择器和 auto 自动测速中；只作为其他节点 detour 的可以关掉"
       />
     </ItemCard>
-  );
-}
-
-/** Textarea for JSON with comments: Tab indents instead of leaving the field. */
-function CodeEditor(props: { id?: string; value: string; onChange: (v: string) => void; minRows?: number; maxRows?: number }) {
-  const lines = props.value.split("\n").length;
-  return (
-    <Textarea
-      id={props.id}
-      className="field-sizing-fixed font-mono text-xs/relaxed [tab-size:2]"
-      rows={Math.min(props.maxRows ?? 24, Math.max(props.minRows ?? 6, lines + 1))}
-      value={props.value}
-      spellCheck={false}
-      autoComplete="off"
-      autoCapitalize="off"
-      onChange={(e) => props.onChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key !== "Tab" || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
-        e.preventDefault();
-        const t = e.currentTarget;
-        const { selectionStart: a, selectionEnd: b, value } = t;
-        const next = `${value.slice(0, a)}  ${value.slice(b)}`;
-        props.onChange(next);
-        requestAnimationFrame(() => t.setSelectionRange(a + 2, a + 2));
-      }}
-    />
   );
 }
 
@@ -787,7 +764,7 @@ function TailnetCard(props: {
         {(id) => <Input id={id} className="font-mono" value={t.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />}
       </FormField>
       <FormField hintAbove label="端点配置" hint="sing-box tailscale 端点 JSON，可写注释；type 和 tag 由生成器填写">
-        {(id) => <CodeEditor id={id} value={t.endpoint} onChange={(endpoint) => set({ endpoint })} maxRows={16} />}
+        {(id) => <CodeEditor labelledBy={`${id}-label`} value={t.endpoint} onChange={(endpoint) => set({ endpoint })} maxLines={16} />}
       </FormField>
       <ToggleRow
         checked={t.magicDns}
@@ -884,11 +861,11 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
             <FormField hintAbove label="自定义 DNS 服务器" hint="sing-box DNS 服务器 JSON，可写注释；tag 由生成器填写，默认经 proxy 访问" wide>
               {(id) => (
                 <CodeEditor
-                  id={id}
+                  labelledBy={`${id}-label`}
                   value={s.remoteDns.custom}
                   onChange={(custom) => set({ remoteDns: { ...s.remoteDns, custom } })}
-                  minRows={6}
-                  maxRows={14}
+                  minLines={6}
+                  maxLines={14}
                 />
               )}
             </FormField>

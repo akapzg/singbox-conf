@@ -95,4 +95,22 @@
       box-shadow: 0 0 0 3px transparent;
     }
   }
+
+  /* CodeMirror grows with its text between these heights (set per editor), then scrolls. */
+  .code-editor .cm-scroller {
+    min-height: var(--cm-min);
+    max-height: var(--cm-max);
+  }
+  :root {
+    --cm-key: #0b5cad;
+    --cm-string: #1f7a3d;
+    --cm-number: #a3530f;
+    --cm-literal: #8a2fb3;
+  }
+  .dark {
+    --cm-key: #8cc4ff;
+    --cm-string: #b5e3a0;
+    --cm-number: #f2c27b;
+    --cm-literal: #e0a3f5;
+  }
 }
