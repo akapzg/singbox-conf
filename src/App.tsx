@@ -272,29 +272,57 @@ interface Candidate {
 }
 
 /**
- * Group members in one list: chosen members on top in their order (move up/down, untick to remove),
- * the rest below (tick to append). Search filters both; "select matches" ticks all visible.
+ * Group members in one list: chosen members on top in their order (drag the handle, or focus it
+ * and press ↑/↓; untick to remove), the rest below (tick to append). Search filters both;
+ * "select matches" ticks all visible.
  */
 function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onChange: (ids: string[]) => void }) {
   const [query, setQuery] = useState("");
+  const [dragging, setDragging] = useState<string | null>(null);
+  const rows = useRef(new Map<string, HTMLLIElement>());
+  // Pointer handlers outlive a render while dragging; read the latest order from here.
+  const latest = useRef(props.selected);
+  latest.current = props.selected;
+
   const q = query.trim().toLowerCase();
   const visible = (c: Candidate) => !q || `${c.tag} ${c.detail}`.toLowerCase().includes(q);
   const selectedSet = new Set(props.selected);
-  const chosen = props.selected.flatMap((id, index) => {
+  const chosen = props.selected.flatMap((id) => {
     const c = props.candidates.find((x) => x.id === id);
-    return c && visible(c) ? [{ c, index }] : [];
+    return c && visible(c) ? [c] : [];
   });
   const rest = props.candidates.filter((c) => !selectedSet.has(c.id) && visible(c));
   const matches = props.candidates.filter(visible);
   const allMatched = matches.length > 0 && matches.every((c) => selectedSet.has(c.id));
   const add = (ids: string[]) => props.onChange([...props.selected, ...ids.filter((id) => !selectedSet.has(id))]);
   const remove = (ids: string[]) => props.onChange(props.selected.filter((id) => !ids.includes(id)));
-  const move = (index: number, delta: number) => {
-    const next = [...props.selected];
-    const [id] = next.splice(index, 1);
-    next.splice(index + delta, 0, id);
-    props.onChange(next);
+
+  /** Put `id` right before `beforeId` (or at the end), in the full member list. */
+  const place = (id: string, beforeId: string | null) => {
+    const next = latest.current.filter((x) => x !== id);
+    const at = beforeId ? next.indexOf(beforeId) : next.length;
+    next.splice(at < 0 ? next.length : at, 0, id);
+    if (next.join() !== latest.current.join()) props.onChange(next);
   };
+  /** The visible chosen row the pointer is above, by row midpoints. */
+  const rowBefore = (y: number, id: string): string | null => {
+    for (const c of chosen) {
+      if (c.id === id) continue;
+      const el = rows.current.get(c.id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (y < r.top + r.height / 2) return c.id;
+    }
+    return null;
+  };
+  const step = (id: string, delta: number) => {
+    const ids = chosen.map((c) => c.id);
+    const i = ids.indexOf(id);
+    const j = i + delta;
+    if (j < 0 || j >= ids.length) return;
+    place(id, delta < 0 ? ids[j] : (ids[j + 1] ?? null));
+  };
+
   const label = (c: Candidate) => (
     <span className="member-label">
       <span className="mono">{c.tag}</span>
@@ -325,33 +353,49 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
         </button>
       </div>
       <ul className="member-list" aria-label="成员">
-        {chosen.map(({ c, index }) => (
-          <li key={c.id} className="chosen">
+        {chosen.map((c) => (
+          <li
+            key={c.id}
+            className={dragging === c.id ? "chosen dragging" : "chosen"}
+            ref={(el) => {
+              if (el) rows.current.set(c.id, el);
+              else rows.current.delete(c.id);
+            }}
+          >
+            <button
+              type="button"
+              className="drag-handle"
+              aria-label={`拖动以调整 ${c.tag} 的顺序，或按上下方向键`}
+              title="拖动排序"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                setDragging(c.id);
+              }}
+              onPointerMove={(e) => {
+                if (dragging !== c.id) return;
+                place(c.id, rowBefore(e.clientY, c.id));
+              }}
+              onPointerUp={() => setDragging(null)}
+              onPointerCancel={() => setDragging(null)}
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                e.preventDefault();
+                step(c.id, e.key === "ArrowUp" ? -1 : 1);
+              }}
+            >
+              <span aria-hidden="true" />
+            </button>
             <label className="check">
               <input type="checkbox" checked onChange={() => remove([c.id])} aria-label={`移出 ${c.tag}`} />
-              <span className="member-index">{index + 1}</span>
               {label(c)}
             </label>
-            <span className="card-actions">
-              <button type="button" className="icon" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`上移 ${c.tag}`} title="上移">
-                ↑
-              </button>
-              <button
-                type="button"
-                className="icon"
-                disabled={index === props.selected.length - 1}
-                onClick={() => move(index, 1)}
-                aria-label={`下移 ${c.tag}`}
-                title="下移"
-              >
-                ↓
-              </button>
-            </span>
           </li>
         ))}
         {chosen.length > 0 && rest.length > 0 && <li className="member-divider" role="separator" />}
         {rest.map((c) => (
           <li key={c.id}>
+            <span className="drag-spacer" aria-hidden="true" />
             <label className="check">
               <input type="checkbox" checked={false} onChange={() => add([c.id])} aria-label={`加入 ${c.tag}`} />
               {label(c)}
