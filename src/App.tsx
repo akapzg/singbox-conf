@@ -277,8 +277,9 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
   const q = query.trim().toLowerCase();
   const matches = props.candidates.filter((c) => !q || `${c.tag} ${c.detail}`.toLowerCase().includes(q));
   const selected = new Set(props.selected);
-  // Keep members in the order of the candidate list (node order, then tailnets, then groups).
-  const commit = (next: Set<string>) => props.onChange(props.candidates.filter((c) => next.has(c.id)).map((c) => c.id));
+  // Members keep the order they were chosen in; new ones go to the end.
+  const add = (ids: string[]) => props.onChange([...props.selected, ...ids.filter((id) => !selected.has(id))]);
+  const remove = (ids: string[]) => props.onChange(props.selected.filter((id) => !ids.includes(id)));
   const allMatched = matches.length > 0 && matches.every((c) => selected.has(c.id));
   return (
     <div className="member-picker">
@@ -294,11 +295,7 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
           type="button"
           className="ghost small"
           disabled={!matches.length}
-          onClick={() => {
-            const next = new Set(selected);
-            matches.forEach((c) => (allMatched ? next.delete(c.id) : next.add(c.id)));
-            commit(next);
-          }}
+          onClick={() => (allMatched ? remove : add)(matches.map((c) => c.id))}
         >
           {allMatched ? `取消选择这 ${matches.length} 项` : `选中${q ? "匹配的" : "全部"} ${matches.length} 项`}
         </button>
@@ -307,16 +304,7 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
         {matches.map((c) => (
           <li key={c.id}>
             <label className="check">
-              <input
-                type="checkbox"
-                checked={selected.has(c.id)}
-                onChange={(e) => {
-                  const next = new Set(selected);
-                  if (e.target.checked) next.add(c.id);
-                  else next.delete(c.id);
-                  commit(next);
-                }}
-              />
+              <input type="checkbox" checked={selected.has(c.id)} onChange={(e) => (e.target.checked ? add : remove)([c.id])} />
               <span className="member-label">
                 <span className="mono">{c.tag}</span>
                 <span className="muted"> · {c.kind}{c.detail && ` · ${c.detail}`}</span>
@@ -326,8 +314,59 @@ function MemberPicker(props: { candidates: Candidate[]; selected: string[]; onCh
         ))}
         {!matches.length && <li className="muted">没有匹配的项</li>}
       </ul>
-      <p className="muted">已选 {props.selected.length} 项</p>
     </div>
+  );
+}
+
+/** Chosen members in order: move up/down or remove. Order is what the client shows. */
+function MemberOrder(props: { candidates: Candidate[]; members: string[]; onChange: (ids: string[]) => void }) {
+  const items = props.members.flatMap((id) => {
+    const c = props.candidates.find((x) => x.id === id);
+    return c ? [c] : [];
+  });
+  const move = (i: number, delta: number) => {
+    const next = [...props.members];
+    const [id] = next.splice(i, 1);
+    next.splice(i + delta, 0, id);
+    props.onChange(next);
+  };
+  if (!items.length) return <p className="muted">还没有选择成员。</p>;
+  return (
+    <ol className="member-order">
+      {items.map((c, i) => (
+        <li key={c.id}>
+          <span className="member-index">{i + 1}</span>
+          <span className="member-label">
+            <span className="mono">{c.tag}</span>
+            <span className="muted"> · {c.kind}</span>
+          </span>
+          <span className="card-actions">
+            <button type="button" className="icon" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`上移 ${c.tag}`} title="上移">
+              ↑
+            </button>
+            <button
+              type="button"
+              className="icon"
+              disabled={i === items.length - 1}
+              onClick={() => move(i, 1)}
+              aria-label={`下移 ${c.tag}`}
+              title="下移"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className="icon danger"
+              onClick={() => props.onChange(props.members.filter((id) => id !== c.id))}
+              aria-label={`移出 ${c.tag}`}
+              title="移出"
+            >
+              ✕
+            </button>
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -397,8 +436,15 @@ function GroupCard(props: {
             </div>
           </div>
           <div className="field">
-            <span className="field-label">成员</span>
+            <span className="field-label">选择成员</span>
             <MemberPicker candidates={candidates.filter((c) => c.id !== g.id)} selected={g.members} onChange={(members) => set({ members })} />
+          </div>
+          <div className="field">
+            <span className="field-label">
+              成员顺序（{g.members.length} 项，客户端按此顺序显示
+              {g.type === "selector" ? "；没设默认选中时用第一个" : ""}）
+            </span>
+            <MemberOrder candidates={candidates} members={g.members} onChange={(members) => set({ members })} />
           </div>
           {g.type === "selector" ? (
             <Field label="默认选中" hint="客户端第一次启动时选中的成员">
