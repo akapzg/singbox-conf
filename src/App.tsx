@@ -5,6 +5,7 @@ import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList,
 import { freshTag, newNode, newTailnet } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
+import { useDialogs } from "./dialog";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -135,9 +136,7 @@ function NodeCard(props: {
             className="icon danger"
             aria-label={`删除节点 ${n.tag}`}
             title="删除"
-            onClick={() => {
-              if (confirm(`删除节点「${n.tag || "未命名"}」？`)) props.onRemove();
-            }}
+            onClick={props.onRemove}
           >
             ✕
           </button>
@@ -340,9 +339,7 @@ function TailnetCard(props: {
             className="icon danger"
             aria-label={`删除 tailnet ${t.tag}`}
             title="删除"
-            onClick={() => {
-              if (confirm(`删除 tailnet「${t.tag || "未命名"}」？`)) props.onRemove();
-            }}
+            onClick={props.onRemove}
           >
             ✕
           </button>
@@ -590,6 +587,7 @@ function highlightJson(text: string): ReactNode[] {
 
 export default function App() {
   const [store, setStore] = useState<Store>(loadStore);
+  const [dialogs, dialogView] = useDialogs();
   const [toast, setToast] = useState("");
   const [tab, setTabState] = useState<Tab>(loadTab);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -660,7 +658,16 @@ export default function App() {
 
   const setSettings = (patch: Partial<Settings>) => setProfile((p) => ({ ...p, settings: { ...p.settings, ...patch } }));
   const updateNode = (i: number, n: ProxyNode) => setProfile((p) => ({ ...p, nodes: p.nodes.map((x, j) => (j === i ? n : x)) }));
-  const removeNode = (i: number) => setProfile((p) => ({ ...p, nodes: p.nodes.filter((_, j) => j !== i) }));
+  const removeNode = async (i: number) => {
+    const tag = profile.nodes[i]?.tag || "未命名";
+    if (!(await dialogs.confirm(`删除节点「${tag}」？`, { confirmLabel: "删除", danger: true }))) return;
+    setProfile((p) => ({ ...p, nodes: p.nodes.filter((_, j) => j !== i) }));
+  };
+  const removeTailnet = async (i: number) => {
+    const tag = profile.settings.tailnets[i]?.tag || "未命名";
+    if (!(await dialogs.confirm(`删除 tailnet「${tag}」？`, { confirmLabel: "删除", danger: true }))) return;
+    setProfile((p) => ({ ...p, settings: { ...p.settings, tailnets: p.settings.tailnets.filter((_, j) => j !== i) } }));
+  };
   const moveNode = (i: number, delta: number) =>
     setProfile((p) => {
       const nodes = [...p.nodes];
@@ -685,14 +692,13 @@ export default function App() {
     const saved = newSavedProfile(name, p);
     setStore((s) => ({ activeId: saved.id, profiles: [...s.profiles, saved] }));
   };
-  const askName = (message: string, initial: string) => prompt(message, initial)?.trim() || null;
 
   const importConfig = async (file: File) => {
     let result: ImportResult;
     try {
       result = importSingBoxConfig(await file.text());
     } catch (e) {
-      alert(`导入失败：${(e as Error).message}`);
+      await dialogs.alert("导入失败", (e as Error).message);
       return;
     }
     // Untouched template examples (still pointing at example.com) are replaced rather than kept.
@@ -700,7 +706,6 @@ export default function App() {
     const nodes = dedupeTags(result.nodes, [...keep.map((n) => n.tag), ...profile.settings.tailnets.map((t) => t.tag)]);
     const tailnets = dedupeTags(result.tailnets, [...profile.settings.tailnets.map((t) => t.tag), ...nodes.map((n) => n.tag)]);
     const summary = [
-      `从 ${file.name} 导入到配置「${active.name}」：`,
       `· ${nodes.length} 个节点${nodes.length ? `（${nodes.map((n) => n.tag).join("、")}）` : ""}`,
       `· ${tailnets.length} 个 tailnet${tailnets.length ? `（${tailnets.map((t) => t.tag).join("、")}）` : ""}`,
       ...result.notes.map((n) => `· ${n}`),
@@ -708,7 +713,7 @@ export default function App() {
       "",
       "DNS 和分流规则不会导入，由本工具的策略生成。追加到现有内容之后，标签重复的会自动改名。",
     ].join("\n");
-    if (!confirm(summary)) return;
+    if (!(await dialogs.confirm(`从 ${file.name} 导入到「${active.name}」`, { message: summary, confirmLabel: "导入" }))) return;
     setProfile((p) => ({
       ...p,
       nodes: [...keep, ...nodes],
@@ -742,27 +747,30 @@ export default function App() {
             {(close) => (
               <>
                 <MenuItem
-                  onSelect={() => {
+                  onSelect={async () => {
                     close();
-                    const name = askName("新配置的名称（从示例开始）", uniqueName("新配置", store));
+                    const name = await dialogs.askText("新建配置", uniqueName("新配置", store), {
+                      message: "从示例开始，例如按设备命名：Mac、iPhone。",
+                      confirmLabel: "新建",
+                    });
                     if (name) addProfile(uniqueName(name, store));
                   }}
                 >
                   新建配置
                 </MenuItem>
                 <MenuItem
-                  onSelect={() => {
+                  onSelect={async () => {
                     close();
-                    const name = askName("副本的名称", uniqueName(`${active.name} 副本`, store));
+                    const name = await dialogs.askText("复制当前配置", uniqueName(`${active.name} 副本`, store), { confirmLabel: "复制" });
                     if (name) addProfile(uniqueName(name, store), structuredClone(profile));
                   }}
                 >
                   复制当前配置
                 </MenuItem>
                 <MenuItem
-                  onSelect={() => {
+                  onSelect={async () => {
                     close();
-                    const name = askName("重命名为", active.name);
+                    const name = await dialogs.askText("重命名配置", active.name, { confirmLabel: "重命名" });
                     if (name && name !== active.name) {
                       const unique = uniqueName(name, store);
                       setStore({ ...store, profiles: store.profiles.map((p) => (p.id === active.id ? { ...p, name: unique } : p)) });
@@ -784,9 +792,9 @@ export default function App() {
                 <MenuItem
                   danger
                   disabled={store.profiles.length < 2}
-                  onSelect={() => {
+                  onSelect={async () => {
                     close();
-                    if (!confirm(`删除配置「${active.name}」？`)) return;
+                    if (!(await dialogs.confirm(`删除配置「${active.name}」？`, { confirmLabel: "删除", danger: true }))) return;
                     const profiles = store.profiles.filter((p) => p.id !== active.id);
                     setStore({ activeId: profiles[0].id, profiles });
                   }}
@@ -795,9 +803,14 @@ export default function App() {
                 </MenuItem>
                 <MenuItem
                   danger
-                  onSelect={() => {
+                  onSelect={async () => {
                     close();
-                    if (!confirm("清除这个浏览器里保存的全部配置，并恢复为示例？")) return;
+                    const ok = await dialogs.confirm("清除全部本地数据？", {
+                      message: `这个浏览器里保存的 ${store.profiles.length} 套配置都会被删除，并恢复为示例。此操作无法撤销。`,
+                      confirmLabel: "全部清除",
+                      danger: true,
+                    });
+                    if (!ok) return;
                     clearStore();
                     setStore(defaultStore());
                   }}
@@ -895,7 +908,7 @@ export default function App() {
                   expanded={expanded.has(t.id)}
                   onToggle={() => toggle(t.id)}
                   onChange={(next) => setSettings({ tailnets: tailnets.map((x, j) => (j === i ? next : x)) })}
-                  onRemove={() => setSettings({ tailnets: tailnets.filter((_, j) => j !== i) })}
+                  onRemove={() => removeTailnet(i)}
                 />
               ))}
             </>
@@ -956,6 +969,7 @@ export default function App() {
         </section>
       </main>
 
+      {dialogView}
       {toast && (
         <div className="toast" role="status">
           {toast}
