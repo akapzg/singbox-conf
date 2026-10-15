@@ -1,7 +1,20 @@
-// In-page replacements for prompt/confirm/alert. Embedded browsers (e.g. app web views) may not
-// support the native ones at all: prompt() throws "not supported" in some of them.
+// In-page replacements for prompt/confirm/alert, built on shadcn's AlertDialog and Dialog. Embedded
+// browsers (e.g. app web views) may not support the native ones: prompt() throws "not supported".
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type Request =
   | { kind: "text"; title: string; message?: string; initial: string; confirmLabel: string; resolve: (v: string | null) => void }
@@ -28,75 +41,62 @@ export function useDialogs(): [Dialogs, ReactNode] {
       ),
     alert: (title, message) => new Promise((resolve) => setRequest({ kind: "alert", title, message, resolve })),
   };
-  const node = request ? <DialogView request={request} done={() => setRequest(null)} /> : null;
+  const node = request ? <DialogView key={Date.now()} request={request} done={() => setRequest(null)} /> : null;
   return [dialogs, node];
 }
 
 function DialogView(props: { request: Request; done: () => void }) {
   const r = props.request;
   const [text, setText] = useState(r.kind === "text" ? r.initial : "");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const okRef = useRef<HTMLButtonElement>(null);
-
-  const cancel = () => {
-    if (r.kind === "text") r.resolve(null);
-    else if (r.kind === "confirm") r.resolve(false);
-    else r.resolve();
-    props.done();
-  };
-  const ok = () => {
-    if (r.kind === "text") r.resolve(text.trim() || null);
-    else if (r.kind === "confirm") r.resolve(true);
+  const settle = (ok: boolean) => {
+    if (r.kind === "text") r.resolve(ok ? text.trim() || null : null);
+    else if (r.kind === "confirm") r.resolve(ok);
     else r.resolve();
     props.done();
   };
 
-  useEffect(() => {
-    if (r.kind === "text") {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    } else {
-      okRef.current?.focus();
-    }
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && cancel();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  if (r.kind === "text") {
+    return (
+      <Dialog open onOpenChange={(open) => !open && settle(false)}>
+        <DialogContent className="sm:max-w-md">
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (text.trim()) settle(true);
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>{r.title}</DialogTitle>
+              {r.message && <DialogDescription>{r.message}</DialogDescription>}
+            </DialogHeader>
+            <Input autoFocus value={text} onChange={(e) => setText(e.target.value)} onFocus={(e) => e.target.select()} spellCheck={false} aria-label={r.title} />
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="outline" />}>取消</DialogClose>
+              <Button type="submit" disabled={!text.trim()}>
+                {r.confirmLabel}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
-    <div className="dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
-      <form
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="dialog-title"
-        onSubmit={(e) => {
-          e.preventDefault();
-          ok();
-        }}
-      >
-        <h3 id="dialog-title">{r.title}</h3>
-        {r.message && <p className="dialog-message">{r.message}</p>}
-        {r.kind === "text" && (
-          <input ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} aria-label={r.title} />
-        )}
-        <div className="dialog-actions">
-          {r.kind !== "alert" && (
-            <button type="button" className="ghost" onClick={cancel}>
-              取消
-            </button>
-          )}
-          <button
-            ref={okRef}
-            type="submit"
-            className={r.kind === "confirm" && r.danger ? "primary danger-fill" : "primary"}
-            disabled={r.kind === "text" && !text.trim()}
-          >
+    <AlertDialog open onOpenChange={(open) => !open && settle(false)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{r.title}</AlertDialogTitle>
+          {r.message && <AlertDialogDescription className="max-h-[50vh] overflow-y-auto whitespace-pre-line">{r.message}</AlertDialogDescription>}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          {r.kind === "confirm" && <AlertDialogCancel onClick={() => settle(false)}>取消</AlertDialogCancel>}
+          <AlertDialogAction variant={r.kind === "confirm" && r.danger ? "destructive" : "default"} onClick={() => settle(true)}>
             {r.kind === "alert" ? "知道了" : r.confirmLabel}
-          </button>
-        </div>
-      </form>
-    </div>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

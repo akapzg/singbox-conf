@@ -108,6 +108,12 @@
 - 导入时，源配置里除 `proxy`、`auto` 以外的 `selector`/`urltest` 也会导入；源配置有 `proxy`/`auto` 时，以它们判断哪些节点“加入代理组”。
 - 实测和文档说明：组切换成员时，**sing-box 内部发起的连接（例如经 `proxy` 到远程 DNS 的 DoT 连接）总会被中断重建**，只有入站连接受 `interrupt_exist_connections` 控制。所以切换节点后，远程 DNS 会立即改走新节点。
 
+## 界面
+
+- React 19 + shadcn/ui（base-mira 风格，底层 Base UI）+ Tailwind v4。组件源码在 `src/components/ui/`，按需改；Base UI 用 `render` 属性代替 `asChild`，依赖 React 19 把 `ref` 当普通属性传递。
+- 顶栏固定：配置切换、管理菜单、检查结果、预览、复制、下载。检查结果和 config.json 预览都在右侧抽屉里，正文单栏，手机上不需要左右分屏。
+- 深色模式跟随系统（`main.tsx` 切换 `.dark`）。旧样式在 `styles.css` 里以 `--sb-*` 变量桥接到 shadcn 的主题变量，元素选择器限定在 `:where(.pane)` 内，迁移完成后删除。
+
 ## 7. 已知局限
 
 - GFWList 模式下，被墙但没收录进 gfwlist 的域名（例如 `intercom.io`）会拿到污染结果；即使换成干净的 IP，这类域名往往还会被 SNI 阻断，所以正确的补救办法是加入自定义代理域名列表，而不是修 DNS。sing-box 1.14 无法“按 DNS 是否被污染”来决定路由（`override_destination` 已废弃）。

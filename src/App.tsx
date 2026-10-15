@@ -6,6 +6,21 @@ import { freshTag, newGroup, newNode, newTailnet } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
+import { Boxes, CircleAlert, CircleCheck, Copy, CopyPlus, Download, Ellipsis, Eye, FileUp, Pencil, Plus, RotateCcw, Trash2, TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -445,7 +460,7 @@ function GroupCard(props: {
       {props.expanded && (
         <div className="card-body">
           <IssueList issues={props.issues} />
-          <div className="grid">
+          <div className="form-grid">
             <Field label="名称" hint="在客户端的节点列表里显示的组名">
               <input value={g.tag} spellCheck={false} onChange={(e) => set({ tag: e.target.value.trim() })} />
             </Field>
@@ -495,7 +510,7 @@ function GroupCard(props: {
               </select>
             </Field>
           ) : (
-            <div className="grid">
+            <div className="form-grid">
               <Field label="测速间隔" hint="留空为 3m">
                 <input value={g.interval} placeholder="3m" spellCheck={false} onChange={(e) => set({ interval: e.target.value.trim() })} />
               </Field>
@@ -663,7 +678,7 @@ function SettingsCard(props: { settings: Settings; onChange: (patch: Partial<Set
   const platform = PLATFORMS.find((p) => p.value === s.platform);
   return (
     <article className="card">
-      <div className="grid">
+      <div className="form-grid">
         <Field label="目标平台" hint={platform?.note} wide>
           <select value={s.platform} onChange={(e) => set({ platform: e.target.value as Platform })}>
             {PLATFORMS.map((p) => (
@@ -769,49 +784,6 @@ function uniqueName(name: string, store: Store): string {
   for (let i = 2; ; i++) if (!names.includes(`${name} ${i}`)) return `${name} ${i}`;
 }
 
-/** Small dropdown menu; closes on outside click and Escape. */
-function Menu(props: { label: string; children: (close: () => void) => ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-  return (
-    <div className="menu" ref={ref}>
-      <button type="button" className="ghost" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {props.label}
-      </button>
-      {open && (
-        <div className="menu-pop" role="menu">
-          {props.children(() => setOpen(false))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MenuItem(props: { onSelect: () => void; danger?: boolean; disabled?: boolean; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      className={props.danger ? "menu-item danger" : "menu-item"}
-      disabled={props.disabled}
-      onClick={props.onSelect}
-    >
-      {props.children}
-    </button>
-  );
-}
-
 type Tab = "nodes" | "groups" | "routing" | "tailscale" | "settings";
 const TABS: { id: Tab; label: string }[] = [
   { id: "nodes", label: "节点" },
@@ -859,7 +831,8 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [tab, setTabState] = useState<Tab>(loadTab);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [showWarnings, setShowWarnings] = useState(false);
+  const [showIssues, setShowIssues] = useState(false);
+  const [preview, setPreview] = useState(false);
   const [scrollTo, setScrollTo] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const active = store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
@@ -1032,301 +1005,344 @@ export default function App() {
   };
 
   const tailnets = profile.settings.tailnets;
+  const counts: Partial<Record<Tab, number>> = { nodes: profile.nodes.length, groups: profile.groups.length, tailscale: tailnets.length };
+  const statusTone = errors.length ? "error" : warnings.length ? "warning" : "ok";
+  const statusText = errors.length ? `${errors.length} 个错误` : warnings.length ? `${warnings.length} 条提醒` : "配置完整";
+  const StatusIcon = errors.length ? CircleAlert : warnings.length ? TriangleAlert : CircleCheck;
+  const copyConfig = async () => setToast((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择");
+
+  const manageMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="outline" size="icon" aria-label="管理配置" />}>
+        <Ellipsis />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>配置「{active.name}」</DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={async () => {
+              const name = await dialogs.askText("新建配置", uniqueName("新配置", store), {
+                message: "从示例开始，例如按设备命名：Mac、iPhone。",
+                confirmLabel: "新建",
+              });
+              if (name) addProfile(uniqueName(name, store));
+            }}
+          >
+            <Plus />
+            新建配置
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={async () => {
+              const name = await dialogs.askText("复制当前配置", uniqueName(`${active.name} 副本`, store), { confirmLabel: "复制" });
+              if (name) addProfile(uniqueName(name, store), structuredClone(profile));
+            }}
+          >
+            <CopyPlus />
+            复制当前配置
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={async () => {
+              const name = await dialogs.askText("重命名配置", active.name, { confirmLabel: "重命名" });
+              if (name && name !== active.name) {
+                const unique = uniqueName(name, store);
+                setStore((s) => ({ ...s, profiles: s.profiles.map((p) => (p.id === active.id ? { ...p, name: unique } : p)) }));
+              }
+            }}
+          >
+            <Pencil />
+            重命名…
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => fileInput.current?.click()}>
+          <FileUp />从 sing-box 配置导入节点…
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={store.profiles.length < 2}
+          onClick={async () => {
+            if (!(await dialogs.confirm(`删除配置「${active.name}」？`, { confirmLabel: "删除", danger: true }))) return;
+            const profiles = store.profiles.filter((p) => p.id !== active.id);
+            setStore({ activeId: profiles[0].id, profiles });
+          }}
+        >
+          <Trash2 />
+          删除当前配置
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          variant="destructive"
+          onClick={async () => {
+            const ok = await dialogs.confirm("清除全部本地数据？", {
+              message: `这个浏览器里保存的 ${store.profiles.length} 套配置都会被删除，并恢复为示例。此操作无法撤销。`,
+              confirmLabel: "全部清除",
+              danger: true,
+            });
+            if (!ok) return;
+            clearStore();
+            setStore(defaultStore());
+          }}
+        >
+          <RotateCcw />
+          清除全部本地数据
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
-    <div className="app">
-      <header className="top">
-        <div className="brand">
-          <h1>sing-box 配置生成器</h1>
-          <p className="muted">纯前端运行，配置只保存在这个浏览器里。适用于 sing-box 1.14 及以上。</p>
-        </div>
-        <div className="top-actions">
-          <label className="profile-select">
-            <span className="field-label">配置</span>
-            <select value={active.id} onChange={(e) => setStore({ ...store, activeId: e.target.value })}>
-              {store.profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Menu label="⋯ 管理">
-            {(close) => (
-              <>
-                <MenuItem
-                  onSelect={async () => {
-                    close();
-                    const name = await dialogs.askText("新建配置", uniqueName("新配置", store), {
-                      message: "从示例开始，例如按设备命名：Mac、iPhone。",
-                      confirmLabel: "新建",
-                    });
-                    if (name) addProfile(uniqueName(name, store));
-                  }}
-                >
-                  新建配置
-                </MenuItem>
-                <MenuItem
-                  onSelect={async () => {
-                    close();
-                    const name = await dialogs.askText("复制当前配置", uniqueName(`${active.name} 副本`, store), { confirmLabel: "复制" });
-                    if (name) addProfile(uniqueName(name, store), structuredClone(profile));
-                  }}
-                >
-                  复制当前配置
-                </MenuItem>
-                <MenuItem
-                  onSelect={async () => {
-                    close();
-                    const name = await dialogs.askText("重命名配置", active.name, { confirmLabel: "重命名" });
-                    if (name && name !== active.name) {
-                      const unique = uniqueName(name, store);
-                      setStore({ ...store, profiles: store.profiles.map((p) => (p.id === active.id ? { ...p, name: unique } : p)) });
-                    }
-                  }}
-                >
-                  重命名…
-                </MenuItem>
-                <hr />
-                <MenuItem
-                  onSelect={() => {
-                    close();
-                    fileInput.current?.click();
-                  }}
-                >
-                  从 sing-box 配置导入节点…
-                </MenuItem>
-                <hr />
-                <MenuItem
-                  danger
-                  disabled={store.profiles.length < 2}
-                  onSelect={async () => {
-                    close();
-                    if (!(await dialogs.confirm(`删除配置「${active.name}」？`, { confirmLabel: "删除", danger: true }))) return;
-                    const profiles = store.profiles.filter((p) => p.id !== active.id);
-                    setStore({ activeId: profiles[0].id, profiles });
-                  }}
-                >
-                  删除当前配置
-                </MenuItem>
-                <MenuItem
-                  danger
-                  onSelect={async () => {
-                    close();
-                    const ok = await dialogs.confirm("清除全部本地数据？", {
-                      message: `这个浏览器里保存的 ${store.profiles.length} 套配置都会被删除，并恢复为示例。此操作无法撤销。`,
-                      confirmLabel: "全部清除",
-                      danger: true,
-                    });
-                    if (!ok) return;
-                    clearStore();
-                    setStore(defaultStore());
-                  }}
-                >
-                  清除全部本地数据
-                </MenuItem>
-              </>
-            )}
-          </Menu>
-          <input
-            ref={fileInput}
-            type="file"
-            accept="application/json,.json"
-            hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importConfig(f);
-              e.target.value = "";
-            }}
-          />
+    <div className="min-h-svh bg-background text-foreground">
+      <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
+          <div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto sm:flex-1">
+            <Boxes className="size-5 shrink-0 text-primary" aria-hidden />
+            <h1 className="mr-auto truncate text-sm font-semibold">
+              sing-box <span className="hidden min-[400px]:inline">配置</span>生成器
+            </h1>
+            <Select
+              value={active.id}
+              items={store.profiles.map((p) => ({ value: p.id, label: p.name }))}
+              onValueChange={(v) => v && setStore((s) => ({ ...s, activeId: v as string }))}
+            >
+              <SelectTrigger className="w-32 sm:w-40" aria-label="当前配置">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {store.profiles.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {manageMenu}
+          </div>
+          <Separator orientation="vertical" className="hidden h-6 sm:block" />
+          <div className="flex w-full items-center gap-1.5 sm:w-auto">
+            <Button variant="ghost" size="sm" className={`mr-auto status-pill ${statusTone}`} onClick={() => setShowIssues(true)} aria-label={`检查结果：${statusText}`}>
+              <StatusIcon />
+              {statusText}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setPreview(true)}>
+              <Eye />
+              预览
+            </Button>
+            <Button variant="outline" size="sm" onClick={copyConfig}>
+              <Copy />
+              复制
+            </Button>
+            <Button size="sm" onClick={() => download("config.json", configText)}>
+              <Download />
+              下载
+            </Button>
+          </div>
         </div>
       </header>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) importConfig(f);
+          e.target.value = "";
+        }}
+      />
 
-      <main className="layout">
-        <section className="pane">
-          <nav className="tabs" role="tablist" aria-label="设置分类">
-            {TABS.map((t) => {
-              const count =
-                t.id === "nodes" ? profile.nodes.length : t.id === "groups" ? profile.groups.length : t.id === "tailscale" ? tailnets.length : null;
-              const state = tabState(t.id);
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === t.id}
-                  className={tab === t.id ? "tab active" : "tab"}
-                  onClick={() => setTab(t.id)}
-                >
-                  {t.label}
-                  {count !== null && <span className="tab-count">{count}</span>}
-                  {state && <span className={`dot ${state}`} aria-label={state === "error" ? "有错误" : "有提醒"} />}
-                </button>
-              );
-            })}
-          </nav>
+      <main className="mx-auto max-w-5xl px-4 pt-1 pb-16">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-4">
+          <div className="-mx-4 overflow-x-auto border-b px-4 [scrollbar-width:none]">
+            <TabsList variant="line" className="h-10" aria-label="设置分类">
+              {TABS.map((t) => {
+                const state = tabState(t.id);
+                return (
+                  <TabsTrigger key={t.id} value={t.id} className="px-2.5 text-[13px]">
+                    {t.label}
+                    {counts[t.id] !== undefined && (
+                      <span className="rounded-full bg-muted px-1.5 text-[11px] leading-4 text-muted-foreground tabular-nums">{counts[t.id]}</span>
+                    )}
+                    {state && <span className={`dot ${state}`} aria-label={state === "error" ? "有错误" : "有提醒"} />}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
+          </div>
 
-          {sectionIssues(tab).length > 0 && <IssueList issues={sectionIssues(tab)} />}
-
-          {tab === "nodes" && (
-            <>
-              <div className="pane-head">
-                <p className="muted">
-                  每个节点是一段 sing-box 出站配置。选择协议模板添加，或
-                  <button type="button" className="link" onClick={() => fileInput.current?.click()}>
-                    从现有的 sing-box 配置导入
-                  </button>
-                  。
-                </p>
-                <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
-              </div>
-              {profile.nodes.length === 0 && <p className="empty">还没有节点：选择协议模板，点击「添加节点」。</p>}
-              {profile.nodes.map((n, i) => (
-                <NodeCard
-                  key={n.id}
-                  node={n}
-                  index={i}
-                  count={profile.nodes.length}
-                  issues={issuesFor(n.id)}
-                  expanded={expanded.has(n.id)}
-                  onToggle={() => toggle(n.id)}
-                  onChange={(next) => updateNode(i, next)}
-                  onRemove={() => removeNode(i)}
-                  onMove={(d) => moveNode(i, d)}
-                />
-              ))}
-            </>
-          )}
-
-          {tab === "groups" && (
-            <>
-              <div className="pane-head">
-                <p className="muted">
-                  所有走代理的流量都经过 <span className="mono">proxy</span>：可以选 <span className="mono">auto</span>（全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
-                </p>
-                <button type="button" className="primary" onClick={addGroup}>
-                  添加代理组
-                </button>
-              </div>
-              <article className="card">
-                <div className="grid">
-                  <Field label="proxy 默认选择" hint="客户端第一次启动时使用">
-                    <select value={profile.settings.proxyDefault} onChange={(e) => setSettings({ proxyDefault: e.target.value })}>
-                      <option value="auto">auto（全部节点自动测速）</option>
-                      {profile.groups.map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {g.tag}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <label className="check wide">
-                    <input
-                      type="checkbox"
-                      checked={profile.settings.listNodesInProxy}
-                      onChange={(e) => setSettings({ listNodesInProxy: e.target.checked })}
-                    />
-                    <span>
-                      在 proxy 里逐个列出节点<span className="muted">（节点多时可以关掉，客户端里只显示 auto 和各代理组）</span>
-                    </span>
-                  </label>
+          <section className="pane" aria-label={TABS.find((t) => t.id === tab)?.label}>
+            {sectionIssues(tab).length > 0 && <IssueList issues={sectionIssues(tab)} />}
+            {tab === "nodes" && (
+              <>
+                <div className="pane-head">
+                  <p className="muted">
+                    每个节点是一段 sing-box 出站配置。选择协议模板添加，或
+                    <button type="button" className="link" onClick={() => fileInput.current?.click()}>
+                      从现有的 sing-box 配置导入
+                    </button>
+                    。
+                  </p>
+                  <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
                 </div>
-              </article>
-              {profile.groups.length === 0 && <p className="empty">还没有代理组。节点不多时不需要，直接用 auto 或手动选节点即可。</p>}
-              {profile.groups.map((g, i) => (
-                <GroupCard
-                  key={g.id}
-                  group={g}
-                  candidates={candidates}
-                  issues={issuesFor(g.id)}
-                  expanded={expanded.has(g.id)}
-                  onToggle={() => toggle(g.id)}
-                  onChange={(next) => setProfile((p) => ({ ...p, groups: p.groups.map((x) => (x.id === g.id ? next : x)) }))}
-                  onRemove={() => removeGroup(i)}
-                />
-              ))}
-            </>
-          )}
-
-          {tab === "routing" && <RoutingCard settings={profile.settings} onChange={setSettings} />}
-
-          {tab === "tailscale" && (
-            <>
-              <div className="pane-head">
-                <p className="muted">需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。</p>
-                <button type="button" className="primary" onClick={addTailnet}>
-                  添加 tailnet
-                </button>
-              </div>
-              {tailnets.length === 0 && <p className="empty">未使用 Tailscale。</p>}
-              {tailnets.map((t, i) => (
-                <TailnetCard
-                  key={t.id}
-                  tailnet={t}
-                  issues={issuesFor(t.id)}
-                  expanded={expanded.has(t.id)}
-                  onToggle={() => toggle(t.id)}
-                  onChange={(next) => setSettings({ tailnets: tailnets.map((x, j) => (j === i ? next : x)) })}
-                  onRemove={() => removeTailnet(i)}
-                />
-              ))}
-            </>
-          )}
-
-          {tab === "settings" && <SettingsCard settings={profile.settings} onChange={setSettings} />}
-        </section>
-
-        <section className="pane output" aria-label="生成的配置">
-          <div className="pane-head">
-            <h2>config.json</h2>
-            <div className="row">
-              <button
-                type="button"
-                className="ghost"
-                onClick={async () => setToast((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择")}
-              >
-                复制
-              </button>
-              <button type="button" className="primary" onClick={() => download("config.json", configText)}>
-                下载
-              </button>
-            </div>
-          </div>
-
-          <div className={`status ${errors.length ? "error" : warnings.length ? "warning" : "ok"}`} role="status">
-            <strong>
-              {errors.length
-                ? `${errors.length} 个错误：sing-box 可能无法加载这份配置`
-                : warnings.length
-                  ? `可以生成，但有 ${warnings.length} 条提醒`
-                  : "配置完整，可以导入客户端"}
-            </strong>
-            {warnings.length > 0 && (
-              <button type="button" className="link" onClick={() => setShowWarnings(!showWarnings)}>
-                {showWarnings ? "收起提醒" : "查看提醒"}
-              </button>
+                {profile.nodes.length === 0 && <p className="empty">还没有节点：选择协议模板，点击「添加节点」。</p>}
+                {profile.nodes.map((n, i) => (
+                  <NodeCard
+                    key={n.id}
+                    node={n}
+                    index={i}
+                    count={profile.nodes.length}
+                    issues={issuesFor(n.id)}
+                    expanded={expanded.has(n.id)}
+                    onToggle={() => toggle(n.id)}
+                    onChange={(next) => updateNode(i, next)}
+                    onRemove={() => removeNode(i)}
+                    onMove={(d) => moveNode(i, d)}
+                  />
+                ))}
+              </>
             )}
-          </div>
-          {(errors.length > 0 || showWarnings) && (
-            <ul className="issues">
-              {[...errors, ...(showWarnings ? warnings : [])].map((i, k) => (
-                <li key={k} className={i.level}>
-                  <button type="button" className="link" onClick={() => goTo(i)}>
-                    {i.message}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
 
-          <pre className="code" tabIndex={0} aria-label="生成的 config.json">
+            {tab === "groups" && (
+              <>
+                <div className="pane-head">
+                  <p className="muted">
+                    所有走代理的流量都经过 <span className="mono">proxy</span>：可以选 <span className="mono">auto</span>（全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
+                  </p>
+                  <button type="button" className="primary" onClick={addGroup}>
+                    添加代理组
+                  </button>
+                </div>
+                <article className="card">
+                  <div className="form-grid">
+                    <Field label="proxy 默认选择" hint="客户端第一次启动时使用">
+                      <select value={profile.settings.proxyDefault} onChange={(e) => setSettings({ proxyDefault: e.target.value })}>
+                        <option value="auto">auto（全部节点自动测速）</option>
+                        {profile.groups.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.tag}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <label className="check wide">
+                      <input
+                        type="checkbox"
+                        checked={profile.settings.listNodesInProxy}
+                        onChange={(e) => setSettings({ listNodesInProxy: e.target.checked })}
+                      />
+                      <span>
+                        在 proxy 里逐个列出节点<span className="muted">（节点多时可以关掉，客户端里只显示 auto 和各代理组）</span>
+                      </span>
+                    </label>
+                  </div>
+                </article>
+                {profile.groups.length === 0 && <p className="empty">还没有代理组。节点不多时不需要，直接用 auto 或手动选节点即可。</p>}
+                {profile.groups.map((g, i) => (
+                  <GroupCard
+                    key={g.id}
+                    group={g}
+                    candidates={candidates}
+                    issues={issuesFor(g.id)}
+                    expanded={expanded.has(g.id)}
+                    onToggle={() => toggle(g.id)}
+                    onChange={(next) => setProfile((p) => ({ ...p, groups: p.groups.map((x) => (x.id === g.id ? next : x)) }))}
+                    onRemove={() => removeGroup(i)}
+                  />
+                ))}
+              </>
+            )}
+
+            {tab === "routing" && <RoutingCard settings={profile.settings} onChange={setSettings} />}
+
+            {tab === "tailscale" && (
+              <>
+                <div className="pane-head">
+                  <p className="muted">需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。</p>
+                  <button type="button" className="primary" onClick={addTailnet}>
+                    添加 tailnet
+                  </button>
+                </div>
+                {tailnets.length === 0 && <p className="empty">未使用 Tailscale。</p>}
+                {tailnets.map((t, i) => (
+                  <TailnetCard
+                    key={t.id}
+                    tailnet={t}
+                    issues={issuesFor(t.id)}
+                    expanded={expanded.has(t.id)}
+                    onToggle={() => toggle(t.id)}
+                    onChange={(next) => setSettings({ tailnets: tailnets.map((x, j) => (j === i ? next : x)) })}
+                    onRemove={() => removeTailnet(i)}
+                  />
+                ))}
+              </>
+            )}
+
+            {tab === "settings" && <SettingsCard settings={profile.settings} onChange={setSettings} />}
+          </section>
+        </Tabs>
+      </main>
+
+      <Sheet open={showIssues} onOpenChange={setShowIssues}>
+        <SheetContent side="right" className="data-[side=right]:w-full data-[side=right]:sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>检查结果</SheetTitle>
+            <SheetDescription>
+              {errors.length
+                ? "有错误时 sing-box 可能无法加载这份配置。点击条目跳到对应位置。"
+                : warnings.length
+                  ? "可以生成，但建议看一下这些提醒。点击条目跳到对应位置。"
+                  : "没有发现问题，可以导入客户端。"}
+            </SheetDescription>
+          </SheetHeader>
+          <ul className="flex flex-col gap-1 overflow-y-auto px-4 pb-4">
+            {[...errors, ...warnings].map((i, k) => (
+              <li key={k}>
+                <button
+                  type="button"
+                  className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs/relaxed hover:bg-muted"
+                  onClick={() => {
+                    setShowIssues(false);
+                    goTo(i);
+                  }}
+                >
+                  {i.level === "error" ? (
+                    <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+                  ) : (
+                    <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                  )}
+                  <span>
+                    {i.message}
+                    <span className="ml-1.5 text-muted-foreground">{TABS.find((t) => t.id === i.section)?.label}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={preview} onOpenChange={setPreview}>
+        <SheetContent side="right" className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
+          <SheetHeader className="border-b">
+            <SheetTitle className="font-mono">config.json</SheetTitle>
+            <SheetDescription>
+              {configText.split("\n").length} 行 · {(new Blob([configText]).size / 1024).toFixed(1)} KB
+            </SheetDescription>
+            <div className="flex gap-1.5 pt-1">
+              <Button variant="outline" size="sm" onClick={copyConfig}>
+                <Copy />
+                复制
+              </Button>
+              <Button size="sm" onClick={() => download("config.json", configText)}>
+                <Download />
+                下载
+              </Button>
+            </div>
+          </SheetHeader>
+          <pre className="code max-h-none min-h-0 flex-1 overflow-auto rounded-none border-0" tabIndex={0} aria-label="生成的 config.json">
             {highlighted}
           </pre>
-          <p className="muted small-print">
-            {configText.split("\n").length} 行 · {(new Blob([configText]).size / 1024).toFixed(1)} KB
-          </p>
-        </section>
-      </main>
+        </SheetContent>
+      </Sheet>
 
       {dialogView}
       {toast && (
