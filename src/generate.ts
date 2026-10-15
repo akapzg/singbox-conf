@@ -689,7 +689,7 @@ export function validate(profile: Profile): Issue[] {
         : group
           ? { section: "groups", id: group.id }
           : NODES;
-    err(where, `标签重复：${t}`);
+    err(where, RESERVED_TAGS.includes(t) ? `标签 ${t} 是生成器自己用的，请换一个` : `标签重复：${t}`);
   }
 
   const subnet = s.clientSubnet.trim();

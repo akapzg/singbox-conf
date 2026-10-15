@@ -200,6 +200,8 @@ function ItemCard(props: {
   title: ReactNode;
   meta: ReactNode;
   badges?: ReactNode;
+  /** Errors and warnings: shown at every width, unlike `badges`. */
+  issues?: Issue[];
   actions: ReactNode;
   /** Drag handle shown before the title, with the row ref and state from useDragSort. */
   handle?: ReactNode;
@@ -233,6 +235,7 @@ function ItemCard(props: {
             <span className="truncate text-xs text-muted-foreground">{props.meta}</span>
           </span>
           {props.badges && <span className="hidden shrink-0 items-center gap-1 sm:flex">{props.badges}</span>}
+          {props.issues && <IssueBadge issues={props.issues} />}
         </button>
         <div className="flex shrink-0 items-center">{props.actions}</div>
       </div>
@@ -281,6 +284,7 @@ function NodeCard(props: {
       id={n.id}
       expanded={props.expanded}
       onToggle={props.onToggle}
+      issues={props.issues}
       handle={<DragHandle label={n.tag || "未命名节点"} {...props.sort.handleProps(n.id)} />}
       rowRef={props.sort.rowRef(n.id)}
       dragging={props.sort.dragging === n.id}
@@ -295,7 +299,6 @@ function NodeCard(props: {
         <>
           {endpoint && <Badge variant="secondary">端点</Badge>}
           {!n.inGroups && <Badge variant="outline">不在代理组</Badge>}
-          <IssueBadge issues={props.issues} />
         </>
       }
       actions={
@@ -534,6 +537,7 @@ function GroupCard(props: {
       id={g.id}
       expanded={props.expanded}
       onToggle={props.onToggle}
+      issues={props.issues}
       title={g.tag || "未命名代理组"}
       meta={
         <>
@@ -546,7 +550,6 @@ function GroupCard(props: {
           )}
         </>
       }
-      badges={<IssueBadge issues={props.issues} />}
       actions={
         <IconAction label={`删除代理组 ${g.tag}`} danger onClick={props.onRemove}>
           <Trash2 />
@@ -617,6 +620,42 @@ function GroupCard(props: {
         </div>
       )}
     </ItemCard>
+  );
+}
+
+/** First steps, shown while the nodes are still the template's examples. */
+function GettingStarted(props: { onImport: () => void }) {
+  const steps: [ReactNode, ReactNode][] = [
+    [
+      "填入你的节点",
+"已有 sing-box 配置（比如 SFM、SFA 里正在用的）可以直接导入，只取其中的节点、Tailscale 和代理组。也可以展开下面的示例，把服务器、密码换成你的，或选协议模板新加。",
+    ],
+    ["按需调整", "节点多可以在「代理组」里分组；「分流」里加自己的直连、代理名单；「高级」里选目标平台。"],
+    ["导入客户端", "右上角下载 config.json，在 sing-box 客户端里新建配置并选这个文件。"],
+  ];
+  return (
+    <section className="rounded-lg bg-primary/[0.03] p-4 ring-1 ring-primary/15">
+      <h2 className="text-sm font-medium">开始使用</h2>
+      <ol className="mt-3 flex flex-col gap-3">
+        {steps.map(([title, body], i) => (
+          <li key={i} className="flex gap-3">
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-medium text-primary-foreground">
+              {i + 1}
+            </span>
+            <span className="flex flex-col gap-0.5">
+              <span className="text-xs font-medium">{title}</span>
+              <span className="text-xs/relaxed text-muted-foreground">{body}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-4 flex flex-wrap gap-1.5 pl-8">
+        <Button onClick={props.onImport}>
+          <FileUp />
+          导入 sing-box 配置
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -715,6 +754,7 @@ function TailnetCard(props: {
       id={t.id}
       expanded={props.expanded}
       onToggle={props.onToggle}
+      issues={props.issues}
       title={t.tag || "未命名 tailnet"}
       meta={
         <span className="font-mono">
@@ -725,7 +765,6 @@ function TailnetCard(props: {
       badges={
         <>
           {t.asProxy && <Badge variant="secondary">代理出口</Badge>}
-          <IssueBadge issues={props.issues} />
         </>
       }
       actions={
@@ -1140,11 +1179,32 @@ export default function App() {
 
   const tailnets = profile.settings.tailnets;
   const counts: Partial<Record<Tab, number>> = { nodes: profile.nodes.length, groups: profile.groups.length, tailscale: tailnets.length };
-  const statusTone = errors.length ? "error" : warnings.length ? "warning" : "ok";
-  const statusText = errors.length ? `${errors.length} 个错误` : warnings.length ? `${warnings.length} 条提醒` : "配置完整";
-  const StatusIcon = errors.length ? CircleAlert : warnings.length ? TriangleAlert : CircleCheck;
+  // Still the template's examples: the config can't be used yet, whatever else checks out.
+  const examplesLeft = profile.nodes.length > 0 && profile.nodes.every(isExampleNode);
+  const statusTone = errors.length ? "error" : warnings.length || examplesLeft ? "warning" : "ok";
+  const statusText = errors.length
+    ? `${errors.length} 个错误`
+    : examplesLeft
+      ? "节点还是示例"
+      : warnings.length
+        ? `${warnings.length} 条提醒`
+        : "可以使用";
+  const StatusIcon = errors.length ? CircleAlert : warnings.length || examplesLeft ? TriangleAlert : CircleCheck;
   const configStats = `${configText.split("\n").length} 行 · ${(new Blob([configText]).size / 1024).toFixed(1)} KB`;
-  const copyConfig = async () => setToast((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择");
+  /** Errors mean sing-box will likely refuse the file: say so before it leaves the page. */
+  const confirmExport = async (verb: string) =>
+    !errors.length ||
+    (await dialogs.confirm(`配置里还有 ${errors.length} 个错误，仍然${verb}？`, {
+      message: `sing-box 可能无法加载这份配置：\n${errors.map((i) => `· ${i.message}`).join("\n")}`,
+      confirmLabel: `仍然${verb}`,
+    }));
+  const copyConfig = async () => {
+    if (!(await confirmExport("复制"))) return;
+    setToast((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择");
+  };
+  const downloadConfig = async () => {
+    if (await confirmExport("下载")) download("config.json", configText);
+  };
 
   const manageMenu = (
     <DropdownMenu>
@@ -1266,7 +1326,7 @@ export default function App() {
               <Copy />
               复制
             </Button>
-            <Button size="sm" onClick={() => download("config.json", configText)}>
+            <Button size="sm" onClick={downloadConfig}>
               <Download />
               下载
             </Button>
@@ -1310,6 +1370,7 @@ export default function App() {
 
             {tab === "nodes" && (
               <>
+                {examplesLeft && <GettingStarted onImport={() => fileInput.current?.click()} />}
                 <SectionHead
                   description={
                     <>
@@ -1416,6 +1477,9 @@ export default function App() {
 
             {tab === "settings" && <SettingsCard settings={profile.settings} onChange={setSettings} />}
           </section>
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            纯前端运行，配置只保存在这个浏览器里，不会上传。生成的配置适用于 sing-box 1.14 及以上。
+          </p>
         </Tabs>
 
         <aside className="sticky top-16 mt-3 hidden h-[calc(100svh-5rem)] min-w-0 flex-col overflow-hidden rounded-lg ring-1 ring-foreground/10 lg:flex" aria-label="生成的配置">
@@ -1436,7 +1500,9 @@ export default function App() {
             <SheetDescription>
               {errors.length
                 ? "有错误时 sing-box 可能无法加载这份配置。点击条目跳到对应位置。"
-                : warnings.length
+                : examplesLeft
+                  ? "节点还是模板里的示例，需要换成你自己的服务器，或从现有的 sing-box 配置导入。"
+                  : warnings.length
                   ? "可以生成，但建议看一下这些提醒。点击条目跳到对应位置。"
                   : "没有发现问题，可以导入客户端。"}
             </SheetDescription>
@@ -1478,7 +1544,7 @@ export default function App() {
                 <Copy />
                 复制
               </Button>
-              <Button size="sm" onClick={() => download("config.json", configText)}>
+              <Button size="sm" onClick={downloadConfig}>
                 <Download />
                 下载
               </Button>

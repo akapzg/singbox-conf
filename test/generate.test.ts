@@ -580,7 +580,7 @@ describe("validate", () => {
     p.nodes.push(newNode({ tag: "direct" }));
     const msgs = validate(p).map((i) => i.message).join("\n");
     expect(msgs).toContain(`标签重复：${p.nodes[0].tag}`);
-    expect(msgs).toContain("标签重复：direct");
+    expect(msgs).toContain("标签 direct 是生成器自己用的，请换一个");
   });
 
   it("flags a malformed ECS subnet and proxy list entries", () => {
