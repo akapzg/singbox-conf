@@ -50,7 +50,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -277,6 +277,7 @@ function NodeCard(props: {
   onToggle: () => void;
   onChange: (n: ProxyNode) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
   sort: ReturnType<typeof useDragSort>;
 }) {
   const { node: n } = props;
@@ -306,9 +307,14 @@ function NodeCard(props: {
         </>
       }
       actions={
-        <IconAction label={`删除节点 ${n.tag}`} danger onClick={props.onRemove}>
-          <Trash2 />
-        </IconAction>
+        <>
+          <IconAction label="复制节点" onClick={props.onDuplicate}>
+            <CopyPlus />
+          </IconAction>
+          <IconAction label={`删除节点 ${n.tag}`} danger onClick={props.onRemove}>
+            <Trash2 />
+          </IconAction>
+        </>
       }
     >
       <IssueList issues={props.issues} />
@@ -330,11 +336,36 @@ function NodeCard(props: {
 
 const TEMPLATE_OPTIONS = TEMPLATES.map((t) => ({ value: t.id, label: t.label }));
 
+/** Templates in the picker, most used first. */
+const TEMPLATE_GROUPS: { label: string; ids: string[] }[] = [
+  { label: "常用", ids: ["hysteria2", "vless-reality", "vless-vision", "trojan", "shadowsocks", "tuic", "anytls", "vmess-ws"] },
+  { label: "其他协议", ids: ["shadowtls", "hysteria", "naive", "snell", "socks", "http", "ssh", "tor"] },
+  { label: "VPN（端点）", ids: ["wireguard", "openconnect", "openvpn-client"] },
+];
+
 function AddNode(props: { usedTags: string[]; onAdd: (n: ProxyNode) => void }) {
   const [templateId, setTemplateId] = useState(TEMPLATES[0].id);
+  const listed = new Set(TEMPLATE_GROUPS.flatMap((g) => g.ids));
+  const groups = [...TEMPLATE_GROUPS, { label: "更多", ids: TEMPLATES.map((t) => t.id).filter((id) => !listed.has(id)) }].filter((g) => g.ids.length);
   return (
     <div className="flex items-center gap-1.5">
-      <SimpleSelect value={templateId} options={TEMPLATE_OPTIONS} onChange={setTemplateId} className="w-44" ariaLabel="协议模板" />
+      <Select value={templateId} items={TEMPLATE_OPTIONS} onValueChange={(v) => v && setTemplateId(v as string)}>
+        <SelectTrigger className="w-48" aria-label="协议模板">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {groups.map((g) => (
+            <SelectGroup key={g.label}>
+              <SelectLabel>{g.label}</SelectLabel>
+              {g.ids.map((id) => (
+                <SelectItem key={id} value={id}>
+                  {TEMPLATES.find((t) => t.id === id)?.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
       <Button
         onClick={() => {
           const t = TEMPLATES.find((x) => x.id === templateId)!;
@@ -1170,7 +1201,8 @@ function highlightJson(text: string): ReactNode[] {
 export default function App() {
   const [store, setStore] = useState<Store>(loadStore);
   const [dialogs, dialogView] = useDialogs();
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
+  const notify = (text: string, undo?: () => void) => setToast({ text, undo });
   const [tab, setTabState] = useState<Tab>(loadTab);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [showIssues, setShowIssues] = useState(false);
@@ -1208,7 +1240,7 @@ export default function App() {
   useEffect(() => saveStore(store), [store]);
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(""), 2000);
+    const t = setTimeout(() => setToast(null), toast.undo ? 6000 : 2000);
     return () => clearTimeout(t);
   }, [toast]);
   // After navigating to a card, bring it into view and flash it.
@@ -1246,19 +1278,41 @@ export default function App() {
 
   const setSettings = (patch: Partial<Settings>) => setProfile((p) => ({ ...p, settings: { ...p.settings, ...patch } }));
   const updateNode = (i: number, n: ProxyNode) => setProfile((p) => ({ ...p, nodes: p.nodes.map((x, j) => (j === i ? n : x)) }));
-  const removeNode = async (i: number) => {
-    const tag = profile.nodes[i]?.tag || "未命名";
-    if (!(await dialogs.confirm(`删除节点「${tag}」？`, { confirmLabel: "删除", danger: true }))) return;
-    const id = profile.nodes[i]?.id;
-    setProfile((p) => ({ ...dropMember(p, id), nodes: p.nodes.filter((_, j) => j !== i) }));
+  // Deleting is immediate; the toast offers undo for as long as nothing else has changed.
+  const profileNow = useRef(profile);
+  profileNow.current = profile;
+  const removeWithUndo = (what: string, update: (p: Profile) => Profile) => {
+    const before = profile;
+    const after = update(before);
+    setProfile(() => after);
+    notify(`已删除${what}`, () => {
+      if (profileNow.current === after) setProfile(() => before);
+      else notify("删除后又有修改，无法撤销");
+    });
   };
-  const removeTailnet = async (i: number) => {
-    const tag = profile.settings.tailnets[i]?.tag || "未命名";
-    if (!(await dialogs.confirm(`删除 tailnet「${tag}」？`, { confirmLabel: "删除", danger: true }))) return;
-    const id = profile.settings.tailnets[i]?.id;
-    setProfile((p) => {
-      const q = dropMember(p, id);
-      return { ...q, settings: { ...q.settings, tailnets: q.settings.tailnets.filter((_, j) => j !== i) } };
+  const removeNode = (i: number) => {
+    const n = profile.nodes[i];
+    removeWithUndo(`节点「${n.tag || "未命名"}」`, (p) => ({ ...dropMember(p, n.id), nodes: p.nodes.filter((x) => x.id !== n.id) }));
+  };
+  const duplicateNode = (i: number) => {
+    const n = profile.nodes[i];
+    const used = [...profile.nodes.map((x) => x.tag), ...profile.groups.map((x) => x.tag), ...tailnets.map((x) => x.tag)];
+    const copy = newNode({ tag: freshTag(n.tag.replace(/-\d+$/, "") || "node", used), body: n.body, inGroups: n.inGroups });
+    setProfile((p) => ({
+      ...p,
+      nodes: [...p.nodes.slice(0, i + 1), copy, ...p.nodes.slice(i + 1)],
+      // The copy joins the same groups, right after the original.
+      groups: p.groups.map((g) => (g.members.includes(n.id) ? { ...g, members: g.members.flatMap((m) => (m === n.id ? [m, copy.id] : [m])) } : g)),
+    }));
+    setExpanded((prev) => new Set(prev).add(copy.id));
+    setFocusId(copy.id);
+    setScrollTo(copy.id);
+  };
+  const removeTailnet = (i: number) => {
+    const t = profile.settings.tailnets[i];
+    removeWithUndo(` tailnet「${t.tag || "未命名"}」`, (p) => {
+      const q = dropMember(p, t.id);
+      return { ...q, settings: { ...q.settings, tailnets: q.settings.tailnets.filter((x) => x.id !== t.id) } };
     });
   };
   const addGroup = () => {
@@ -1267,10 +1321,9 @@ export default function App() {
     setExpanded((prev) => new Set(prev).add(g.id));
     setScrollTo(g.id);
   };
-  const removeGroup = async (i: number) => {
+  const removeGroup = (i: number) => {
     const g = profile.groups[i];
-    if (!(await dialogs.confirm(`删除代理组「${g.tag || "未命名"}」？`, { message: "组里的节点不会被删除。", confirmLabel: "删除", danger: true }))) return;
-    setProfile((p) => {
+    removeWithUndo(`代理组「${g.tag || "未命名"}」`, (p) => {
       const q = dropMember(p, g.id);
       return {
         ...q,
@@ -1360,7 +1413,7 @@ export default function App() {
       settings: { ...p.settings, tailnets: [...p.settings.tailnets, ...tailnets] },
     }));
     setTab(nodes.length ? "nodes" : "tailscale");
-    setToast(`已导入 ${nodes.length} 个节点、${tailnets.length} 个 tailnet${groups.length ? `、${groups.length} 个代理组` : ""}`);
+    notify(`已导入 ${nodes.length} 个节点、${tailnets.length} 个 tailnet${groups.length ? `、${groups.length} 个代理组` : ""}`);
   };
 
   const tailnets = profile.settings.tailnets;
@@ -1393,7 +1446,7 @@ export default function App() {
     }));
   const copyConfig = async () => {
     if (!(await confirmExport("复制"))) return;
-    setToast((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择");
+    notify((await copyText(configText)) ? "已复制到剪贴板" : "复制失败，请手动选择");
   };
   const downloadConfig = async () => {
     if (await confirmExport("下载")) download("config.json", configText);
@@ -1590,6 +1643,7 @@ export default function App() {
                       updateNode(i, next);
                     }}
                     onRemove={() => removeNode(i)}
+                    onDuplicate={() => duplicateNode(i)}
                     sort={nodeSort}
                   />
                 ))}
@@ -1772,8 +1826,20 @@ export default function App() {
 
       {dialogView}
       {toast && (
-        <div className="toast" role="status">
-          {toast}
+        <div className="toast flex items-center gap-3" role="status">
+          {toast.text}
+          {toast.undo && (
+            <button
+              type="button"
+              className="font-medium underline underline-offset-2"
+              onClick={() => {
+                toast.undo!();
+                setToast(null);
+              }}
+            >
+              撤销
+            </button>
+          )}
         </div>
       )}
     </div>
