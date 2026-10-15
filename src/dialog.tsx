@@ -1,7 +1,7 @@
 // In-page replacements for prompt/confirm/alert, built on shadcn's AlertDialog and Dialog. Embedded
 // browsers (e.g. app web views) may not support the native ones: prompt() throws "not supported".
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,30 +18,42 @@ import { Input } from "@/components/ui/input";
 
 type Request =
   | { kind: "text"; title: string; message?: string; initial: string; confirmLabel: string; resolve: (v: string | null) => void }
-  | { kind: "confirm"; title: string; message?: string; confirmLabel: string; danger: boolean; resolve: (v: boolean) => void }
+  | {
+      kind: "confirm";
+      title: string;
+      message?: string;
+      content?: ReactNode;
+      confirmLabel: string;
+      danger: boolean;
+      resolve: (v: boolean) => void;
+    }
   | { kind: "alert"; title: string; message?: string; resolve: () => void };
 
 export interface Dialogs {
   /** Ask for a short text; null when cancelled or left empty. */
   askText(title: string, initial: string, options?: { message?: string; confirmLabel?: string }): Promise<string | null>;
-  confirm(title: string, options?: { message?: string; confirmLabel?: string; danger?: boolean }): Promise<boolean>;
+  /** `content` goes below the message, for richer summaries. */
+  confirm(title: string, options?: { message?: string; content?: ReactNode; confirmLabel?: string; danger?: boolean }): Promise<boolean>;
   alert(title: string, message?: string): Promise<void>;
 }
 
 export function useDialogs(): [Dialogs, ReactNode] {
-  const [request, setRequest] = useState<Request | null>(null);
+  // Each request gets its own key so a new dialog starts fresh, while re-renders keep its state.
+  const [request, setRequest] = useState<(Request & { key: number }) | null>(null);
+  const seq = useRef(0);
+  const open = (r: Request) => setRequest({ ...r, key: ++seq.current });
   const dialogs: Dialogs = {
     askText: (title, initial, o = {}) =>
       new Promise((resolve) =>
-        setRequest({ kind: "text", title, initial, message: o.message, confirmLabel: o.confirmLabel ?? "确定", resolve }),
+        open({ kind: "text", title, initial, message: o.message, confirmLabel: o.confirmLabel ?? "确定", resolve }),
       ),
     confirm: (title, o = {}) =>
       new Promise((resolve) =>
-        setRequest({ kind: "confirm", title, message: o.message, confirmLabel: o.confirmLabel ?? "确定", danger: !!o.danger, resolve }),
+        open({ kind: "confirm", title, message: o.message, content: o.content, confirmLabel: o.confirmLabel ?? "确定", danger: !!o.danger, resolve }),
       ),
-    alert: (title, message) => new Promise((resolve) => setRequest({ kind: "alert", title, message, resolve })),
+    alert: (title, message) => new Promise((resolve) => open({ kind: "alert", title, message, resolve })),
   };
-  const node = request ? <DialogView key={Date.now()} request={request} done={() => setRequest(null)} /> : null;
+  const node = request ? <DialogView key={request.key} request={request} done={() => setRequest(null)} /> : null;
   return [dialogs, node];
 }
 
@@ -85,11 +97,14 @@ function DialogView(props: { request: Request; done: () => void }) {
 
   return (
     <AlertDialog open onOpenChange={(open) => !open && settle(false)}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        className={r.kind === "confirm" && r.content ? "data-[size=default]:max-w-[calc(100%-2rem)] data-[size=default]:sm:max-w-lg" : undefined}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{r.title}</AlertDialogTitle>
           {r.message && <AlertDialogDescription className="max-h-[50vh] overflow-y-auto whitespace-pre-line">{r.message}</AlertDialogDescription>}
         </AlertDialogHeader>
+        {r.kind === "confirm" && r.content && <div className="max-h-[55vh] overflow-y-auto">{r.content}</div>}
         <AlertDialogFooter>
           {r.kind === "confirm" && <AlertDialogCancel onClick={() => settle(false)}>取消</AlertDialogCancel>}
           <AlertDialogAction variant={r.kind === "confirm" && r.danger ? "destructive" : "default"} onClick={() => settle(true)}>

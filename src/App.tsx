@@ -20,6 +20,7 @@ import {
   Eye,
   EyeOff,
   FileUp,
+  Info,
   GripVertical,
   Pencil,
   RefreshCw,
@@ -28,6 +29,7 @@ import {
   Search,
   Trash2,
   TriangleAlert,
+  WrapText,
 } from "lucide-react";
 import { cn } from "cn";
 import { Badge } from "@/components/ui/badge";
@@ -678,6 +680,43 @@ function GroupCard(props: {
   );
 }
 
+/** What an import will add, for the confirmation dialog. */
+function ImportSummary(props: { rows: { label: string; tags: string[] }[]; notes: string[] }) {
+  const SHOWN = 12;
+  return (
+    <div className="flex flex-col gap-3 text-xs">
+      <dl className="flex flex-col gap-2">
+        {props.rows.map((r) => (
+          <div key={r.label} className="flex gap-3">
+            <dt className="w-16 shrink-0 text-muted-foreground">
+              {r.label} <span className="font-medium text-foreground tabular-nums">{r.tags.length}</span>
+            </dt>
+            <dd className="flex min-w-0 flex-wrap gap-1">
+              {r.tags.length === 0 && <span className="text-muted-foreground">无</span>}
+              {r.tags.slice(0, SHOWN).map((t) => (
+                <Badge key={t} variant="secondary" className="font-mono">
+                  {t}
+                </Badge>
+              ))}
+              {r.tags.length > SHOWN && <span className="text-muted-foreground">等 {r.tags.length} 个</span>}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {props.notes.length > 0 && (
+        <ul className="flex flex-col gap-1 rounded-md bg-muted/60 px-3 py-2 text-muted-foreground">
+          {props.notes.map((n) => (
+            <li key={n} className="flex gap-2">
+              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              {n}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** First steps, shown while the nodes are still the template's examples. */
 function GettingStarted(props: { onImport: () => void }) {
   const steps: [ReactNode, ReactNode][] = [
@@ -1037,8 +1076,62 @@ function loadTab(): Tab {
   return "nodes";
 }
 
-/** Line height of the preview (.code: 12px × 1.5). */
-const PREVIEW_LINE = 18;
+/**
+ * The generated config, a row per line. The focused item's lines are shaded, and scrolled into
+ * view when the preview opens or another item gets focus (not on every keystroke).
+ */
+function ConfigPreview(props: {
+  lines: ReactNode[][];
+  focus: { start: number; end: number } | null;
+  focusKey: string | null;
+  wrap: boolean;
+  /** False while its sheet is closed; opening it jumps to the focused item again. */
+  visible?: boolean;
+}) {
+  const ref = useRef<HTMLPreElement>(null);
+  const first = useRef(true);
+  useEffect(() => {
+    if (props.visible === false) {
+      first.current = true;
+      return;
+    }
+    const smooth = !first.current;
+    first.current = false;
+    // In a sheet that is just opening, layout isn't done yet: wait a frame.
+    const frame = requestAnimationFrame(() => {
+      const pre = ref.current;
+      const row = props.focus && (pre?.querySelector(`[data-line="${props.focus.start}"]`) as HTMLElement | null);
+      if (!pre || !row) return;
+      const top = row.getBoundingClientRect().top - pre.getBoundingClientRect().top + pre.scrollTop - 48;
+      pre.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "instant" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.focusKey, props.visible]);
+  const { focus } = props;
+  return (
+    <pre
+      ref={ref}
+      className={cn("code relative min-h-0 flex-1 overflow-auto px-0", props.wrap && "whitespace-pre-wrap [overflow-wrap:anywhere]")}
+      tabIndex={0}
+      aria-label="生成的 config.json"
+    >
+      <div className={props.wrap ? undefined : "w-max min-w-full"}>
+        {props.lines.map((line, i) => (
+          <div
+            key={i}
+            data-line={i}
+            className={cn(
+              "px-3.5",
+              focus && i >= focus.start && i <= focus.end && "bg-primary/[0.07] shadow-[inset_2px_0_0_var(--color-primary)]",
+            )}
+          >
+            {line.length ? line : "\n"}
+          </div>
+        ))}
+      </div>
+    </pre>
+  );
+}
 
 /** First and last line of the object whose "tag" is `tag` in pretty-printed JSON. */
 function jsonBlock(text: string, tag: string): { start: number; end: number } | null {
@@ -1085,7 +1178,7 @@ export default function App() {
   const [scrollTo, setScrollTo] = useState<string | null>(null);
   /** The node, group or tailnet last opened or edited; the preview follows it. */
   const [focusId, setFocusId] = useState<string | null>(null);
-  const previewRef = useRef<HTMLPreElement>(null);
+  const [wrap, setWrap] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const active = store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
   const profile = active.profile;
@@ -1133,7 +1226,7 @@ export default function App() {
 
   const issues = useMemo(() => validate(profile), [profile]);
   const configText = useMemo(() => JSON.stringify(generateConfig(profile), null, 2), [profile]);
-  const highlighted = useMemo(() => highlightJson(configText), [configText]);
+  const previewLines = useMemo(() => configText.split("\n").map(highlightJson), [configText]);
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
   const issuesFor = (id: string) => issues.filter((i) => i.id === id);
@@ -1236,16 +1329,30 @@ export default function App() {
       ...tailnets.map((t) => t.tag),
       ...keep.map((n) => n.tag),
     ]);
-    const summary = [
-      `· ${nodes.length} 个节点${nodes.length ? `（${nodes.map((n) => n.tag).join("、")}）` : ""}`,
-      `· ${tailnets.length} 个 tailnet${tailnets.length ? `（${tailnets.map((t) => t.tag).join("、")}）` : ""}`,
-      ...(groups.length ? [`· ${groups.length} 个代理组（${groups.map((g) => g.tag).join("、")}）`] : []),
-      ...result.notes.map((n) => `· ${n}`),
-      ...(keep.length < profile.nodes.length ? ["· 现有的示例节点会被替换"] : []),
-      "",
-      "DNS 和分流规则不会导入，由本工具的策略生成。追加到现有内容之后，标签重复的会自动改名。",
-    ].join("\n");
-    if (!(await dialogs.confirm(`从 ${file.name} 导入到「${active.name}」`, { message: summary, confirmLabel: "导入" }))) return;
+    const renamed = [...result.nodes, ...result.tailnets, ...result.groups]
+      .map((x, i) => [x.tag, [...nodes, ...tailnets, ...groups][i].tag])
+      .filter(([from, to]) => from !== to)
+      .map(([from, to]) => `${from} → ${to}`);
+    const content = (
+      <ImportSummary
+        rows={[
+          { label: "节点", tags: nodes.map((n) => n.tag) },
+          { label: "tailnet", tags: tailnets.map((t) => t.tag) },
+          { label: "代理组", tags: groups.map((g) => g.tag) },
+        ]}
+        notes={[
+          ...(keep.length < profile.nodes.length ? ["现有的示例节点会被替换"] : []),
+          ...(renamed.length ? [`标签重复，已改名：${renamed.join("、")}`] : []),
+          ...result.notes,
+        ]}
+      />
+    );
+    const ok = await dialogs.confirm(`导入到「${active.name}」`, {
+      message: `来自 ${file.name}。只导入节点、Tailscale 和代理组；DNS 和分流由本工具的策略生成。`,
+      content,
+      confirmLabel: "导入",
+    });
+    if (!ok) return;
     setProfile((p) => ({
       ...p,
       nodes: [...keep, ...nodes],
@@ -1271,12 +1378,11 @@ export default function App() {
   const StatusIcon = errors.length ? CircleAlert : warnings.length || examplesLeft ? TriangleAlert : CircleCheck;
   const focusTag = [...profile.nodes, ...profile.groups, ...tailnets].find((x) => x.id === focusId)?.tag;
   const focusLines = useMemo(() => (focusTag ? jsonBlock(configText, focusTag) : null), [configText, focusTag]);
-  // Bring the focused item's JSON into view when another item gets focus (not on every keystroke).
-  useEffect(() => {
-    const pre = previewRef.current;
-    if (!pre || !focusLines) return;
-    pre.scrollTo({ top: Math.max(0, focusLines.start * PREVIEW_LINE - 48), behavior: "smooth" });
-  }, [focusId]);
+  const wrapToggle = (
+    <IconAction label={wrap ? "不自动换行" : "自动换行"} onClick={() => setWrap(!wrap)}>
+      <WrapText className={wrap ? "text-foreground" : undefined} />
+    </IconAction>
+  );
   const configStats = `${configText.split("\n").length} 行 · ${(new Blob([configText]).size / 1024).toFixed(1)} KB`;
   /** Errors mean sing-box will likely refuse the file: say so before it leaves the page. */
   const confirmExport = async (verb: string) =>
@@ -1579,20 +1685,14 @@ export default function App() {
         </Tabs>
 
         <aside className="sticky top-16 mt-3 hidden h-[calc(100svh-5rem)] min-w-0 flex-col overflow-hidden rounded-lg ring-1 ring-foreground/10 lg:flex" aria-label="生成的配置">
-          <div className="flex items-baseline justify-between gap-3 border-b bg-card px-3 py-2">
+          <div className="flex items-center justify-between gap-3 border-b bg-card py-1 pr-1 pl-3">
             <span className="font-mono text-xs font-medium">config.json</span>
-            <span className="text-xs text-muted-foreground">{configStats}</span>
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              {configStats}
+              {wrapToggle}
+            </span>
           </div>
-          <pre ref={previewRef} className="code relative min-h-0 flex-1 overflow-auto" tabIndex={0} aria-label="生成的 config.json">
-            {focusLines && (
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 border-l-2 border-primary/60 bg-primary/[0.06] transition-[top,height] duration-200"
-                style={{ top: 14 + focusLines.start * PREVIEW_LINE, height: (focusLines.end - focusLines.start + 1) * PREVIEW_LINE }}
-              />
-            )}
-            <span className="relative">{highlighted}</span>
-          </pre>
+          <ConfigPreview lines={previewLines} focus={focusLines} focusKey={focusId} wrap={wrap} />
         </aside>
       </main>
 
@@ -1654,7 +1754,7 @@ export default function App() {
           <SheetHeader className="border-b">
             <SheetTitle className="font-mono">config.json</SheetTitle>
             <SheetDescription>{configStats}</SheetDescription>
-            <div className="flex gap-1.5 pt-1">
+            <div className="flex items-center gap-1.5 pt-1">
               <Button variant="outline" size="sm" onClick={copyConfig}>
                 <Copy />
                 复制
@@ -1663,11 +1763,10 @@ export default function App() {
                 <Download />
                 下载
               </Button>
+              <span className="ml-auto">{wrapToggle}</span>
             </div>
           </SheetHeader>
-          <pre className="code max-h-none min-h-0 flex-1 overflow-auto rounded-none border-0" tabIndex={0} aria-label="生成的 config.json">
-            {highlighted}
-          </pre>
+          <ConfigPreview lines={previewLines} focus={focusLines} focusKey={focusId} wrap={wrap} visible={preview} />
         </SheetContent>
       </Sheet>
 
