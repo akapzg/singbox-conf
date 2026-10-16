@@ -1718,7 +1718,9 @@ export default function App() {
             </TabsList>
           </div>
 
-          <section className="flex min-w-0 flex-col gap-3 pb-16 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-3 lg:pb-8" aria-label={TABS.find((t) => t.id === tab)?.label}>
+          {/* A scroll container clips what is drawn outside its children: the 1px rings around cards and
+              panels, and focus rings. The negative margin plus padding leaves room for them. */}
+          <section className="flex min-w-0 flex-col gap-3 pb-16 lg:-mx-1 lg:-mt-1 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:px-1 lg:pt-1 lg:pr-3 lg:pb-8" aria-label={TABS.find((t) => t.id === tab)?.label}>
             {sectionIssues(tab).length > 0 && <IssueList issues={sectionIssues(tab)} />}
 
             {tab === "nodes" && (
