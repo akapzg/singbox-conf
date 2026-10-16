@@ -1257,6 +1257,11 @@ export default function App() {
       profiles: s.profiles.map((x) => (x.id === s.activeId ? { ...x, profile: update(x.profile) } : x)),
     }));
   const setTab = (t: Tab) => {
+    // What the preview shades belongs to the tab being left.
+    if (t !== tab) {
+      setFocusId(null);
+      setEdit(null);
+    }
     setTabState(t);
     try {
       localStorage.setItem(TAB_KEY, t);
