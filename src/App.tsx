@@ -1131,14 +1131,19 @@ function ConfigPreview(props: {
   visible?: boolean;
 }) {
   const ref = useRef<HTMLPreElement>(null);
-  const first = useRef(true);
+  /** The item last scrolled to; null while hidden, so reopening jumps again (without animation). */
+  const scrolledTo = useRef<string | null | undefined>(undefined);
+  const hasBlock = !!props.focus;
   useEffect(() => {
     if (props.visible === false) {
-      first.current = true;
+      scrolledTo.current = undefined;
       return;
     }
-    const smooth = !first.current;
-    first.current = false;
+    // Scroll on a new item, when the sheet opens, and when the item's block first appears (an empty
+    // group is left out of the config until it gets members).
+    if (!hasBlock || scrolledTo.current === props.focusKey) return;
+    const smooth = scrolledTo.current !== undefined;
+    scrolledTo.current = props.focusKey;
     // In a sheet that is just opening, layout isn't done yet: wait a frame.
     const frame = requestAnimationFrame(() => {
       const pre = ref.current;
@@ -1148,7 +1153,7 @@ function ConfigPreview(props: {
       pre.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "instant" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.focusKey, props.visible]);
+  }, [props.focusKey, props.visible, hasBlock]);
   const { focus } = props;
   return (
     <pre
