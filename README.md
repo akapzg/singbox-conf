@@ -38,15 +38,22 @@ SING_BOX=$(python3 scripts/fetch-sing-box.py 1.14.3 /tmp/sing-box) npm run check
 
 ## 发布到 Cloudflare
 
-站点是一个只含静态资源的 Cloudflare Worker（`wrangler.jsonc`，资源目录 `dist/`），由 CI 部署：
+站点是一个只含静态资源的 Cloudflare Worker（`wrangler.jsonc`，资源目录 `dist/`），由 Cloudflare 的 Git 集成（Workers Builds）构建和部署，GitHub 里不需要任何 Cloudflare 凭据：
 
-- **推送任意分支**：部署为该分支的 Workers Preview，地址形如 `https://<分支名>-singbox-confgen.<子域>.workers.dev`，写在 CI 的运行摘要里。删除分支时，`preview-cleanup.yml` 会删掉对应的 Preview。Preview 地址默认公开（带 `noindex`），需要时可用 Cloudflare Access 保护。
-- **推送版本 tag**（`v1.2.3`，需与 `package.json` 的 `version` 一致）：测试和三平台 `sing-box check` 都通过后，部署到正式地址，并创建 GitHub Release，附上 `dist/` 的压缩包供自部署。
+- **推送任意分支**（包括 `main`）：Cloudflare 构建后部署为该分支的 Preview，地址在 Worker 的 Previews 页面里。Preview 地址默认公开（带 `noindex`），需要时可用 Cloudflare Access 保护。
+- **推送版本 tag**（`v1.2.3`，需与 `package.json` 的 `version` 一致）：GitHub Actions 跑完测试和三平台 `sing-box check` 后，把 `release` 分支指到这个提交，Cloudflare 随即部署到正式地址；同时创建 GitHub Release，附上 `dist/` 的压缩包供自部署。
 
-需要在仓库的 Settings → Secrets and variables → Actions 里设置两个 secret（没设置时 Preview 步骤会跳过，正式发布会失败）：
+在 Cloudflare 里设置一次（Workers & Pages → Create → Import a repository，选这个仓库）：
 
-- `CLOUDFLARE_ACCOUNT_ID`：Cloudflare 账户 ID。
-- `CLOUDFLARE_API_TOKEN`：账户 API 令牌，权限给 Account → Workers Scripts → Edit 即可（不涉及路由和自定义域名）。第一次部署会创建 Worker。
+| 设置 | 值 |
+| --- | --- |
+| Git branch（正式分支） | `release` |
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy`（默认） |
+| Preview command | `npx wrangler preview`（默认） |
+| Root directory | `/` |
+
+依赖会自动安装，Node 版本取自 `.node-version`。`release` 分支只由发布流程写入，不要直接往上提交。
 
 发布新版本：
 
