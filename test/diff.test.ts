@@ -16,9 +16,21 @@ describe("changedLines", () => {
     expect(changedLines("a\nd", "a\nb\nc\nd")).toEqual([{ start: 1, end: 2 }]);
   });
 
-  it("marks a deletion on the following line", () => {
-    expect(changedLines("a\nb\nc", "a\nc")).toEqual([{ start: 1, end: 1 }]);
-    expect(changedLines("a\nb", "a")).toEqual([{ start: 0, end: 0 }]);
+  it("reports a deletion as the position it happened at", () => {
+    expect(changedLines("a\nb\nc", "a\nc")).toEqual([{ start: 1, end: 1, deleted: true }]);
+    expect(changedLines("a\nb", "a")).toEqual([{ start: 1, end: 1, deleted: true }]);
+    expect(changedLines("a\nb\nc\nd", "a\nd")).toEqual([{ start: 1, end: 1, deleted: true }]);
+  });
+
+  it("puts a removed object's deletion before the next object, not inside it", () => {
+    const obj = (x: string) => `{\n  "${x}"\n},`;
+    expect(changedLines(`[\n${obj("a")}\n${obj("b")}\n]`, `[\n${obj("b")}\n]`)).toEqual([{ start: 1, end: 1, deleted: true }]);
+    // The same for an inserted object: its own lines are shaded, not the next object's "{".
+    expect(changedLines(`[\n${obj("b")}\n]`, `[\n${obj("a")}\n${obj("b")}\n]`)).toEqual([{ start: 1, end: 3 }]);
+  });
+
+  it("shows a replacement as changed lines only", () => {
+    expect(changedLines("a\nb\nc\nd", "a\nX\nd")).toEqual([{ start: 1, end: 1 }]);
   });
 
   it("reports two separate changes as two ranges", () => {

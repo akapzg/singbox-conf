@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import type { Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
 import { REMOTE_DNS, generateConfig, nodeObject, parseDomainList, parseRuleList, tailnetEndpoint, validate, type Issue } from "./generate";
@@ -1148,7 +1148,8 @@ function ConfigPreview(props: {
     // In a sheet that is just opening, layout isn't done yet: wait a frame.
     const frame = requestAnimationFrame(() => {
       const pre = ref.current;
-      const row = pre?.querySelector(`[data-line="${first}"]`) as HTMLElement | null;
+      // A deletion at the very end sits before a line that doesn't exist: aim at the last one.
+      const row = pre?.querySelector(`[data-line="${Math.min(first, props.lines.length - 1)}"]`) as HTMLElement | null;
       if (!pre || !row) return;
       const offset = row.getBoundingClientRect().top - pre.getBoundingClientRect().top;
       if (props.reveal && offset >= 0 && offset + row.offsetHeight <= pre.clientHeight) return;
@@ -1156,7 +1157,10 @@ function ConfigPreview(props: {
     });
     return () => cancelAnimationFrame(frame);
   }, [props.scrollKey, props.visible, first === undefined]);
-  const shaded = (i: number) => props.ranges.some((r) => i >= r.start && i <= r.end);
+  const shaded = (i: number) => props.ranges.some((r) => !r.deleted && i >= r.start && i <= r.end);
+  /** A deletion shows as a red line where the lines were, before row `i`. */
+  const deletedBefore = (i: number) => props.ranges.some((r) => r.deleted && r.start === i);
+  const deletedLine = <div aria-hidden className="relative z-10 -my-px h-0.5 bg-destructive" />;
   return (
     <pre
       ref={ref}
@@ -1166,10 +1170,14 @@ function ConfigPreview(props: {
     >
       <div className={props.wrap ? undefined : "w-max min-w-full"}>
         {props.lines.map((line, i) => (
-          <div key={i} data-line={i} className={cn("px-3.5", shaded(i) && "bg-primary/[0.07] shadow-[inset_2px_0_0_var(--color-primary)]")}>
-            {line.length ? line : "\n"}
-          </div>
+          <Fragment key={i}>
+            {deletedBefore(i) && deletedLine}
+            <div data-line={i} className={cn("px-3.5", shaded(i) && "bg-primary/[0.07] shadow-[inset_2px_0_0_var(--color-primary)]")}>
+              {line.length ? line : "\n"}
+            </div>
+          </Fragment>
         ))}
+        {deletedBefore(props.lines.length) && deletedLine}
       </div>
     </pre>
   );
