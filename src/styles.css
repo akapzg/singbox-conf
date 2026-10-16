@@ -2,11 +2,14 @@
    the highlight on a card jumped to from the checks panel. Colours build on the shadcn theme in
    src/index.css. */
 @layer base {
+  /* Tell the browser which theme is on, so native scrollbars and form parts match it. */
   :root {
+    color-scheme: light;
     --sb-warn: #8a5a00;
     --sb-ok: #1d7a3f;
   }
   .dark {
+    color-scheme: dark;
     --sb-warn: #e0a83a;
     --sb-ok: #5cc483;
   }
