@@ -1603,8 +1603,10 @@ export default function App() {
       />
 
       {/* Settings on the left; on wide screens the generated config stays visible on the right. */}
-      <main className="mx-auto grid max-w-3xl items-start lg:max-w-[1400px] gap-6 px-4 pt-1 pb-16 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4">
+      {/* Bottom padding on the left column only: on <main> it made a short page scroll by that
+          much, and the preview column, as tall as its row, could never stick. */}
+      <main className="mx-auto grid max-w-3xl items-start gap-6 px-4 pt-1 lg:max-w-[1400px] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4 pb-16">
           <div className="-mx-4 overflow-x-auto border-b px-4 [scrollbar-width:none] lg:mx-0 lg:px-0">
             <TabsList variant="line" className="h-10" aria-label="设置分类">
               {TABS.map((t) => {
