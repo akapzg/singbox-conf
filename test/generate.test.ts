@@ -40,9 +40,9 @@ function personalProfile(): Profile {
         "state_directory": "tailscale-secondary",
         "hostname": "my-mac-2",
         "accept_routes": true,
-        "exit_node": "office-gw",
         "exit_node_allow_lan_access": true
       }`,
+      exitNode: "office-gw",
       acceptDefaultResolvers: true,
       dnsDomains: ["corp.example.com"],
     }),
@@ -460,15 +460,15 @@ describe("Tailscale", () => {
     expect(on.outbounds.find((o: any) => o.tag === "auto").outbounds).not.toContain("a");
   });
 
-  it("writes the exit node field into the endpoint while it is a proxy", () => {
+  it("takes the exit node from its field only", () => {
     const endpoint = (t: Tailnet) => gen(withTailnets(t)).endpoints.find((e: any) => e.tag === "a");
-    expect(endpoint(newTailnet({ tag: "a", asProxy: true, exitNode: "gw" })).exit_node).toBe("gw");
-    // The field wins over the JSON; empty keeps the JSON's; off means no exit node at all.
-    expect(endpoint(newTailnet({ tag: "a", asProxy: true, exitNode: "gw", endpoint: '{"exit_node":"old"}' })).exit_node).toBe("gw");
-    expect(endpoint(newTailnet({ tag: "a", asProxy: true, endpoint: '{"exit_node":"old"}' })).exit_node).toBe("old");
-    expect(endpoint(newTailnet({ tag: "a", exitNode: "gw" })).exit_node).toBeUndefined();
-    const msgs = validate(withTailnets(newTailnet({ tag: "a", asProxy: true, exitNode: "gw" }))).map((i) => i.message);
-    expect(msgs.join("\n")).not.toContain("出口节点");
+    expect(endpoint(newTailnet({ tag: "a", exitNode: "gw" })).exit_node).toBe("gw");
+    // One in the endpoint JSON is dropped and pointed out.
+    const stale = newTailnet({ tag: "a", exitNode: "", endpoint: '{"exit_node":"old"}' });
+    expect(endpoint(stale).exit_node).toBeUndefined();
+    expect(validate(withTailnets(stale)).map((i) => i.detail)).toContain("端点 JSON 里的 exit_node 不会生效，请填在「出口节点」里");
+    const ok = validate(withTailnets(newTailnet({ tag: "a", asProxy: true, exitNode: "gw" }))).map((i) => i.message);
+    expect(ok.join("\n")).not.toContain("出口节点");
   });
 
   it("validates tags, JSON and state directories", () => {

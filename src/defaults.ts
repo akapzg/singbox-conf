@@ -52,7 +52,7 @@ export const TAILSCALE_ENDPOINT_TEMPLATE = `{
   "hostname": "my-device",
   // 接收其他设备通告的子网路由
   "accept_routes": true
-  // 其他可用字段：control_url（自建 Headscale）、auth_key、exit_node、advertise_routes 等
+  // 其他可用字段：control_url（自建 Headscale）、auth_key、advertise_routes 等；出口节点填在下面的「出口节点」里
   // 详见 https://sing-box.sagernet.org/zh/configuration/endpoint/tailscale/
 }`;
 

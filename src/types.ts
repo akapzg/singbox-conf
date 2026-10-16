@@ -29,7 +29,7 @@ export interface Tailnet {
   routes: string[];
   /** Offer the endpoint as a choice in the `proxy` selector (e.g. to use an exit node). */
   asProxy: boolean;
-  /** Exit node written into the endpoint while `asProxy` is on; empty keeps what the JSON says. */
+  /** Exit node for the endpoint (`exit_node`); the endpoint JSON's own is ignored. */
   exitNode: string;
 }
 

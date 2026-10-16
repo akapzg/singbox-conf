@@ -50,7 +50,8 @@ function fullProfile(): Profile {
       newTailnet({ tag: "home", endpoint: '{"state_directory":"ts-home","hostname":"a","accept_routes":true}' }),
       newTailnet({
         tag: "work",
-        endpoint: '{"state_directory":"ts-work","hostname":"b","accept_routes":true,"exit_node":"gw"}',
+        endpoint: '{"state_directory":"ts-work","hostname":"b","accept_routes":true}',
+        exitNode: "gw",
         acceptDefaultResolvers: true,
         dnsDomains: ["corp.example.com"],
         routes: ["10.20.0.0/16", "nas.example.com"],
