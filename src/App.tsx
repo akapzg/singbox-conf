@@ -467,10 +467,12 @@ function ListEditor(props: {
         spellCheck={false}
         onChange={(e) => props.onChange(e.target.value.split("\n"))}
       />
-      <p className="text-xs text-muted-foreground">
-        {count ? `已识别 ${count} ${props.unit}` : "未设置"}
-        {invalid.length > 0 && <span className="text-destructive">；无法识别：{invalid.join("、")}</span>}
-      </p>
+      {(count > 0 || invalid.length > 0) && (
+        <p className="text-xs text-muted-foreground">
+          {count > 0 && `已识别 ${count} ${props.unit}`}
+          {invalid.length > 0 && <span className="text-destructive">{count > 0 && "；"}无法识别：{invalid.join("、")}</span>}
+        </p>
+      )}
     </>
   );
 }
@@ -789,11 +791,20 @@ function SubHeading(props: { children: ReactNode }) {
   return <h3 className="-mb-1 border-t pt-4 text-xs font-medium text-muted-foreground">{props.children}</h3>;
 }
 
-function SectionHead(props: { description: ReactNode; children: ReactNode }) {
+/** What a tab is about, as its own paragraph above everything else. */
+function Intro(props: { children: ReactNode }) {
+  return <p className="max-w-prose text-xs/relaxed text-muted-foreground">{props.children}</p>;
+}
+
+/** Title and count of a list, with its actions on the right. */
+function ListHead(props: { title: string; count: number; children: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-      <p className="min-w-60 flex-1 text-xs/relaxed text-muted-foreground">{props.description}</p>
-      {props.children}
+    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+      <h2 className="text-xs font-medium">
+        {props.title}
+        <span className="ml-1.5 text-muted-foreground tabular-nums">{props.count}</span>
+      </h2>
+      <div className="flex flex-wrap items-center gap-1.5">{props.children}</div>
     </div>
   );
 }
@@ -1617,19 +1628,19 @@ export default function App() {
             {tab === "nodes" && (
               <>
                 {examplesLeft && <GettingStarted onImport={() => fileInput.current?.click()} />}
-                <SectionHead
-                  description={
-                    <>
-                      每个节点是一段 sing-box 出站配置。选择协议模板添加，或
-                      <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => fileInput.current?.click()}>
-                        从现有的 sing-box 配置导入
-                      </button>
-                      。拖动左侧手柄调整顺序，客户端里按此顺序显示。
-                    </>
-                  }
-                >
+                {/* The getting-started guide says the same while it shows. */}
+                {!examplesLeft && (
+                  <Intro>每个节点是一段 sing-box 出站配置，可以按协议模板新加，也可以从现有的 sing-box 配置导入。拖动左侧手柄调整顺序，客户端里按此顺序显示。</Intro>
+                )}
+                <ListHead title="节点" count={profile.nodes.length}>
+                  {!examplesLeft && (
+                    <Button variant="ghost" onClick={() => fileInput.current?.click()}>
+                      <FileUp />
+                      导入
+                    </Button>
+                  )}
                   <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
-                </SectionHead>
+                </ListHead>
                 {profile.nodes.length === 0 && <Empty>还没有节点：选择协议模板，点击「添加节点」。</Empty>}
                 {profile.nodes.map((n, i) => (
                   <NodeCard
@@ -1652,19 +1663,10 @@ export default function App() {
 
             {tab === "groups" && (
               <>
-                <SectionHead
-                  description={
-                    <>
-                      所有走代理的流量都经过 <span className="font-mono">proxy</span>：可以选 <span className="font-mono">auto</span>
-                      （全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
-                    </>
-                  }
-                >
-                  <Button onClick={addGroup}>
-                    <Plus />
-                    添加代理组
-                  </Button>
-                </SectionHead>
+                <Intro>
+                  所有走代理的流量都经过 <span className="font-mono">proxy</span>：可以选 <span className="font-mono">auto</span>
+                  （全部节点自动测速）、下面的代理组，或单个节点。节点多时可以按地区、用途分组。
+                </Intro>
                 <Panel title="proxy 选择器">
                   <FormField label="默认选择" hint="客户端第一次启动时使用">
                     {(id) => (
@@ -1684,6 +1686,12 @@ export default function App() {
                     description="节点多时可以关掉，客户端里只显示 auto 和各代理组"
                   />
                 </Panel>
+                <ListHead title="代理组" count={profile.groups.length}>
+                  <Button onClick={addGroup}>
+                    <Plus />
+                    添加代理组
+                  </Button>
+                </ListHead>
                 {profile.groups.length === 0 && <Empty>还没有代理组。节点不多时不需要，直接用 auto 或手动选节点即可。</Empty>}
                 {profile.groups.map((g, i) => (
                   <GroupCard
@@ -1707,12 +1715,13 @@ export default function App() {
 
             {tab === "tailscale" && (
               <>
-                <SectionHead description="需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。">
+                <Intro>需要访问 tailnet 里的设备或公司内网时添加。tailnet 设备和已批准的子网路由会自动走对应的 tailnet。</Intro>
+                <ListHead title="tailnet" count={tailnets.length}>
                   <Button onClick={addTailnet}>
                     <Plus />
                     添加 tailnet
                   </Button>
-                </SectionHead>
+                </ListHead>
                 {tailnets.length === 0 && <Empty>还没有 tailnet。需要从这台设备访问家里或公司 tailnet 里的设备、子网时再添加。</Empty>}
                 {tailnets.map((t, i) => (
                   <TailnetCard
