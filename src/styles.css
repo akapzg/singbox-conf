@@ -78,6 +78,12 @@
   [id^="item-"] {
     scroll-margin-top: 112px;
   }
+  /* On wide screens the settings column scrolls by itself, under no sticky header. */
+  @media (min-width: 1024px) {
+    [id^="item-"] {
+      scroll-margin-top: 12px;
+    }
+  }
   .flash {
     animation: flash 1.2s ease-out;
   }

@@ -8,6 +8,7 @@ import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
 import { CodeEditor } from "./code-editor";
 import { useDragSort } from "./drag-sort";
+import { changedLines, type LineRange } from "./diff";
 import {
   Boxes,
   ChevronRight,
@@ -1119,42 +1120,43 @@ function loadTab(): Tab {
 }
 
 /**
- * The generated config, a row per line. The focused item's lines are shaded, and scrolled into
- * view when the preview opens or another item gets focus (not on every keystroke).
+ * The generated config, a row per line, with `ranges` shaded. The first range is scrolled into
+ * view when `scrollKey` changes or the sheet opens; with `reveal`, only when it is out of view, so
+ * typing doesn't move the preview around.
  */
 function ConfigPreview(props: {
   lines: ReactNode[][];
-  focus: { start: number; end: number } | null;
-  focusKey: string | null;
+  ranges: LineRange[];
+  scrollKey: string | null;
+  reveal: boolean;
   wrap: boolean;
-  /** False while its sheet is closed; opening it jumps to the focused item again. */
+  /** False while its sheet is closed; opening it jumps to the first range again. */
   visible?: boolean;
 }) {
   const ref = useRef<HTMLPreElement>(null);
-  /** The item last scrolled to; null while hidden, so reopening jumps again (without animation). */
+  /** The key last scrolled for; undefined while hidden, so reopening jumps again (without animation). */
   const scrolledTo = useRef<string | null | undefined>(undefined);
-  const hasBlock = !!props.focus;
+  const first = props.ranges[0]?.start;
   useEffect(() => {
     if (props.visible === false) {
       scrolledTo.current = undefined;
       return;
     }
-    // Scroll on a new item, when the sheet opens, and when the item's block first appears (an empty
-    // group is left out of the config until it gets members).
-    if (!hasBlock || scrolledTo.current === props.focusKey) return;
+    if (first === undefined || scrolledTo.current === props.scrollKey) return;
     const smooth = scrolledTo.current !== undefined;
-    scrolledTo.current = props.focusKey;
+    scrolledTo.current = props.scrollKey;
     // In a sheet that is just opening, layout isn't done yet: wait a frame.
     const frame = requestAnimationFrame(() => {
       const pre = ref.current;
-      const row = props.focus && (pre?.querySelector(`[data-line="${props.focus.start}"]`) as HTMLElement | null);
+      const row = pre?.querySelector(`[data-line="${first}"]`) as HTMLElement | null;
       if (!pre || !row) return;
-      const top = row.getBoundingClientRect().top - pre.getBoundingClientRect().top + pre.scrollTop - 48;
-      pre.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "instant" });
+      const offset = row.getBoundingClientRect().top - pre.getBoundingClientRect().top;
+      if (props.reveal && offset >= 0 && offset + row.offsetHeight <= pre.clientHeight) return;
+      pre.scrollTo({ top: Math.max(0, offset + pre.scrollTop - 48), behavior: smooth ? "smooth" : "instant" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.focusKey, props.visible, hasBlock]);
-  const { focus } = props;
+  }, [props.scrollKey, props.visible, first === undefined]);
+  const shaded = (i: number) => props.ranges.some((r) => i >= r.start && i <= r.end);
   return (
     <pre
       ref={ref}
@@ -1164,14 +1166,7 @@ function ConfigPreview(props: {
     >
       <div className={props.wrap ? undefined : "w-max min-w-full"}>
         {props.lines.map((line, i) => (
-          <div
-            key={i}
-            data-line={i}
-            className={cn(
-              "px-3.5",
-              focus && i >= focus.start && i <= focus.end && "bg-primary/[0.07] shadow-[inset_2px_0_0_var(--color-primary)]",
-            )}
-          >
+          <div key={i} data-line={i} className={cn("px-3.5", shaded(i) && "bg-primary/[0.07] shadow-[inset_2px_0_0_var(--color-primary)]")}>
             {line.length ? line : "\n"}
           </div>
         ))}
@@ -1244,7 +1239,10 @@ export default function App() {
     }
   };
   const toggle = (id: string) => {
-    if (!expanded.has(id)) setFocusId(id);
+    if (!expanded.has(id)) {
+      setFocusId(id);
+      setEdit(null);
+    }
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -1447,6 +1445,19 @@ export default function App() {
   const StatusIcon = errors.length ? CircleAlert : warnings.length || examplesLeft ? TriangleAlert : CircleCheck;
   const focusTag = [...profile.nodes, ...profile.groups, ...tailnets].find((x) => x.id === focusId)?.tag;
   const focusLines = useMemo(() => (focusTag ? jsonBlock(configText, focusTag) : null), [configText, focusTag]);
+  // What the last edit changed in the config; shown until a card is opened. A switch may touch
+  // several places (MagicDNS: DNS server and rules), which the focused item's block wouldn't show.
+  const [edit, setEdit] = useState<{ ranges: LineRange[]; seq: number } | null>(null);
+  const prevConfig = useRef({ text: configText, profileId: active.id });
+  useEffect(() => {
+    const prev = prevConfig.current;
+    prevConfig.current = { text: configText, profileId: active.id };
+    if (prev.profileId !== active.id) setEdit(null);
+    else if (prev.text !== configText) setEdit((e) => ({ ranges: changedLines(prev.text, configText), seq: (e?.seq ?? 0) + 1 }));
+  }, [configText, active.id]);
+  const previewProps = edit
+    ? { ranges: edit.ranges, scrollKey: `edit-${edit.seq}`, reveal: true }
+    : { ranges: focusLines ? [focusLines] : [], scrollKey: focusId, reveal: false };
   const wrapToggle = (
     <IconAction label={wrap ? "不自动换行" : "自动换行"} onClick={() => setWrap(!wrap)}>
       <WrapText className={wrap ? "text-foreground" : undefined} />
@@ -1548,8 +1559,8 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-svh bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+    <div className="flex min-h-svh flex-col bg-background text-foreground lg:h-svh">
+      <header className="sticky top-0 z-30 shrink-0 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="mx-auto flex max-w-3xl flex-wrap lg:max-w-[1400px] items-center gap-x-3 gap-y-2 px-4 py-2.5">
           <div className="flex w-full min-w-0 items-center gap-1.5 sm:w-auto sm:flex-1">
             <Boxes className="size-5 shrink-0 text-primary" aria-hidden />
@@ -1607,11 +1618,11 @@ export default function App() {
         }}
       />
 
-      {/* Settings on the left; on wide screens the generated config stays visible on the right. */}
-      {/* Bottom padding on the left column only: on <main> it made a short page scroll by that
-          much, and the preview column, as tall as its row, could never stick. */}
-      <main className="mx-auto grid max-w-3xl items-start gap-6 px-4 pt-1 lg:max-w-[1400px] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4 pb-16">
+      {/* Settings on the left; on wide screens the page itself doesn't scroll: the settings column
+          scrolls on its own (so its scrollbar sits next to it, not beyond the preview) and the
+          generated config fills the right column. */}
+      <main className="mx-auto grid w-full max-w-3xl items-start gap-6 px-4 pt-1 lg:min-h-0 lg:flex-1 lg:max-w-[1400px] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-stretch">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4 lg:min-h-0 lg:overflow-hidden">
           <div className="-mx-4 overflow-x-auto border-b px-4 [scrollbar-width:none] lg:mx-0 lg:px-0">
             <TabsList variant="line" className="h-10" aria-label="设置分类">
               {TABS.map((t) => {
@@ -1629,7 +1640,7 @@ export default function App() {
             </TabsList>
           </div>
 
-          <section className="flex min-w-0 flex-col gap-3" aria-label={TABS.find((t) => t.id === tab)?.label}>
+          <section className="flex min-w-0 flex-col gap-3 pb-16 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-3 lg:pb-8" aria-label={TABS.find((t) => t.id === tab)?.label}>
             {sectionIssues(tab).length > 0 && <IssueList issues={sectionIssues(tab)} />}
 
             {tab === "nodes" && (
@@ -1748,13 +1759,13 @@ export default function App() {
             )}
 
             {tab === "settings" && <SettingsCard settings={profile.settings} onChange={setSettings} />}
+            <p className="mt-6 text-center text-xs text-muted-foreground">
+              纯前端运行，配置只保存在这个浏览器里，不会上传。生成的配置适用于 sing-box 1.14 及以上。
+            </p>
           </section>
-          <p className="mt-6 text-center text-xs text-muted-foreground">
-            纯前端运行，配置只保存在这个浏览器里，不会上传。生成的配置适用于 sing-box 1.14 及以上。
-          </p>
         </Tabs>
 
-        <aside className="sticky top-16 mt-3 hidden h-[calc(100svh-5rem)] min-w-0 flex-col overflow-hidden rounded-lg ring-1 ring-foreground/10 lg:flex" aria-label="生成的配置">
+        <aside className="hidden min-w-0 flex-col overflow-hidden rounded-lg ring-1 ring-foreground/10 lg:my-3 lg:flex lg:min-h-0" aria-label="生成的配置">
           <div className="flex items-center justify-between gap-3 border-b bg-card py-1 pr-1 pl-3">
             <span className="font-mono text-xs font-medium">config.json</span>
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -1762,7 +1773,7 @@ export default function App() {
               {wrapToggle}
             </span>
           </div>
-          <ConfigPreview lines={previewLines} focus={focusLines} focusKey={focusId} wrap={wrap} />
+          <ConfigPreview lines={previewLines} {...previewProps} wrap={wrap} />
         </aside>
       </main>
 
@@ -1836,7 +1847,7 @@ export default function App() {
               <span className="ml-auto">{wrapToggle}</span>
             </div>
           </SheetHeader>
-          <ConfigPreview lines={previewLines} focus={focusLines} focusKey={focusId} wrap={wrap} visible={preview} />
+          <ConfigPreview lines={previewLines} {...previewProps} wrap={wrap} visible={preview} />
         </SheetContent>
       </Sheet>
 
