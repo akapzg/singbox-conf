@@ -51,3 +51,78 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: echo "SING_BOX=$(python scripts/fetch-sing-box.py "$SING_BOX_VERSION" "$RUNNER_TEMP/sing-box")" >> "$GITHUB_ENV"
       - run: npm run check:singbox
+
+  # Every branch push gets its own Workers Preview; version tags go to production.
+  # Both need the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repository secrets (see README).
+  # Only push events deploy, so pull requests from forks never see the credentials.
+  preview:
+    name: Deploy preview
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency:
+      group: preview-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Skip without Cloudflare credentials
+        if: env.HAS_CLOUDFLARE != 'true'
+        run: echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not set; skipping the preview deploy."
+      - name: Deploy Worker Preview
+        if: env.HAS_CLOUDFLARE == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          name=$(scripts/preview-name.sh "$GITHUB_REF_NAME")
+          out=$(npx wrangler preview --name "$name" --tag "${GITHUB_SHA::7}" --message "$GITHUB_REF_NAME ${GITHUB_SHA::7}" --json)
+          url=$(jq -er '.preview.urls[0]' <<<"$out")
+          echo "::notice title=Preview::$url"
+          echo "### Preview \`$name\`: $url" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Release and deploy to production
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [test, sing-box-check]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Tag matches package.json version
+        run: |
+          expected="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version ($expected)."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy to production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --tag "$GITHUB_REF_NAME" --message "Release $GITHUB_REF_NAME"
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive="singbox-confgen-$GITHUB_REF_NAME.zip"
+          (cd dist && zip -qr "../$archive" .)
+          gh release create "$GITHUB_REF_NAME" "$archive" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

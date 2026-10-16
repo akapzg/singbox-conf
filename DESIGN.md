@@ -122,6 +122,13 @@
 - GFWList 模式下，被墙但没收录进 gfwlist 的域名（例如 `intercom.io`）会拿到污染结果；即使换成干净的 IP，这类域名往往还会被 SNI 阻断，所以正确的补救办法是加入自定义代理域名列表，而不是修 DNS。sing-box 1.14 无法“按 DNS 是否被污染”来决定路由（`override_destination` 已废弃）。
 - 规则集从 `raw.githubusercontent.com` 经代理下载；代理未就绪时首次启动会等待。
 
+## 部署
+
+- Cloudflare Workers，只含静态资源（`wrangler.jsonc`）。选 Wrangler 而不是新的 `cf` CLI：`cf` 要求 Vite 6+ 和当时刚发布一天的 `@cloudflare/vite-plugin` beta，不符合“依赖至少发布两周”的约定；Wrangler 直接上传 `dist/`，不碰构建。
+- 分支推送 → Workers Preview（每个分支一个，名字由 `scripts/preview-name.sh` 规范化）；版本 tag → 测试和三平台 `sing-box check` 通过后正式部署，并发 GitHub Release（附 `dist/` 压缩包）。只在 push 事件部署，fork 的 PR 拿不到凭据。
+- `compatibility_date` 不能晚于所固定 Wrangler 自带运行时支持的日期；纯静态资源不受它影响。
+- `public/_headers` 补上只能用响应头表达的安全设置（`frame-ancestors` 等）。
+
 ## 8. 测试
 
 - `test/generate.test.ts`：非 DNS 部分与蓝本逐字段比对（允许的差异逐项列出）；DNS 部分用 `test/dnswalk.ts` 按“模式 × 查询类型 × 域名类别”推演会问哪个服务器、最终怎么回答。
