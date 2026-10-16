@@ -74,7 +74,7 @@
 | 使用 tailnet 的默认 DNS | DNS 服务器上的 `accept_default_resolvers` |
 | 分域 DNS 域名 | `domain_suffix` → `<标签>-dns`，放在所有 DNS 规则最前 |
 | 额外路由 | `domain_suffix`/`ip_cidr` → 端点 |
-| 作为代理出口 | 端点加入 `proxy` 选择器（不进 `auto`，需要端点里设了 `exit_node`） |
+| 作为代理出口 | 端点加入 `proxy` 选择器（不进 `auto`）；「出口节点」字段写入端点的 `exit_node`，留空则用端点 JSON 里的；导入时端点里的 `exit_node` 会提取到这个字段 |
 
 `preferred_by` 路由规则和“拒绝直连国内 IPv6”规则里对 tailnet 的排除，都由生成器自动处理。
 

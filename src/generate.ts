@@ -154,7 +154,8 @@ export function tailnetEndpoint(t: Tailnet): { endpoint?: Json; error?: string }
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "必须是一个 JSON 对象" };
   const { type: _type, tag: _tag, ...rest } = body as Json;
-  return { endpoint: { type: "tailscale", tag: t.tag, ...rest } };
+  const exitNode = t.asProxy && t.exitNode.trim();
+  return { endpoint: { type: "tailscale", tag: t.tag, ...rest, ...(exitNode ? { exit_node: exitNode } : {}) } };
 }
 
 // ---------------------------------------------------------------------------
@@ -663,7 +664,7 @@ export function validate(profile: Profile): Issue[] {
       const dir = String(endpoint.state_directory ?? "tailscale");
       if (stateDirs.has(dir)) err(at, `state_directory「${dir}」与「${stateDirs.get(dir)}」重复，每个 tailnet 需要独立目录`);
       stateDirs.set(dir, t.tag);
-      if (t.asProxy && !endpoint.exit_node) warn(at, "作为代理出口但没有设置 exit_node，经它的流量只能到达 tailnet 内的地址");
+      if (t.asProxy && !endpoint.exit_node) warn(at, "作为代理出口但没有填出口节点，经它的流量只能到达 tailnet 内的地址");
     }
     const dns = parseDomainList(t.dnsDomains.join("\n"));
     if (dns.invalid.length) err(at, `分域 DNS 域名格式不正确：${dns.invalid.join("、")}`);

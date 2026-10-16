@@ -31,8 +31,12 @@ describe("importing an existing sing-box config", () => {
     expect(home.acceptDefaultResolvers).toBe(false);
     expect(work.acceptDefaultResolvers).toBe(true);
     expect(work.dnsDomains).toEqual(["corp.example.com"]);
-    expect(JSON.parse(work.endpoint)).toMatchObject({ hostname: "my-mac-2", exit_node: "office-gw", accept_routes: true });
+    expect(JSON.parse(work.endpoint)).toMatchObject({ hostname: "my-mac-2", accept_routes: true });
     expect(JSON.parse(work.endpoint).type).toBeUndefined();
+    // The exit node moves into its own field and makes the tailnet a proxy choice.
+    expect(JSON.parse(work.endpoint).exit_node).toBeUndefined();
+    expect(work.exitNode).toBe("office-gw");
+    expect(work.asProxy).toBe(true);
   });
 
   it.each(["full-apple", "combo-ss-shadowtls"])("round-trips nodes, groups and Tailscale through a generated config (%s)", (name) => {

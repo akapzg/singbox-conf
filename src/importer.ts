@@ -63,7 +63,8 @@ export function importSingBoxConfig(text: string): ImportResult {
   const tailnets: Tailnet[] = endpoints
     .filter((e) => e.type === "tailscale")
     .map((e) => {
-      const { type: _type, tag, ...body } = e;
+      // The exit node is edited in its own field; the rest of the endpoint stays as JSON.
+      const { type: _type, tag, exit_node, ...body } = e;
       const server = dnsServers.find((s) => s.type === "tailscale" && s.endpoint === tag);
       const dnsTag = server?.tag;
       const magicDns = !!dnsTag && dnsRules.some((r) => list(r.preferred_by).includes(dnsTag));
@@ -80,7 +81,8 @@ export function importSingBoxConfig(text: string): ImportResult {
         acceptDefaultResolvers: !!server?.accept_default_resolvers,
         dnsDomains,
         routes,
-        asProxy: grouped.has(tag),
+        asProxy: grouped.has(tag) || typeof exit_node === "string",
+        exitNode: typeof exit_node === "string" ? exit_node : "",
       });
     });
   const tailnetDns = new Set(dnsServers.filter((s) => s.type === "tailscale").map((s) => s.tag));

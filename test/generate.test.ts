@@ -4,7 +4,7 @@ import { generateConfig, jsonErrorOffset, nodeObject, parseJsonc, parseRuleList,
 import { blueprintProfile, newGroup, newNode, newTailnet } from "../src/defaults";
 import { normalizeProfile } from "../src/storage";
 import { TEMPLATES, NODE_TYPES } from "../src/templates";
-import type { Profile } from "../src/types";
+import type { Profile, Tailnet } from "../src/types";
 import { normalize } from "./normalize";
 import { walk, type Query } from "./dnswalk";
 
@@ -460,6 +460,17 @@ describe("Tailscale", () => {
     expect(on.outbounds.find((o: any) => o.tag === "auto").outbounds).not.toContain("a");
   });
 
+  it("writes the exit node field into the endpoint while it is a proxy", () => {
+    const endpoint = (t: Tailnet) => gen(withTailnets(t)).endpoints.find((e: any) => e.tag === "a");
+    expect(endpoint(newTailnet({ tag: "a", asProxy: true, exitNode: "gw" })).exit_node).toBe("gw");
+    // The field wins over the JSON; empty keeps the JSON's; off means no exit node at all.
+    expect(endpoint(newTailnet({ tag: "a", asProxy: true, exitNode: "gw", endpoint: '{"exit_node":"old"}' })).exit_node).toBe("gw");
+    expect(endpoint(newTailnet({ tag: "a", asProxy: true, endpoint: '{"exit_node":"old"}' })).exit_node).toBe("old");
+    expect(endpoint(newTailnet({ tag: "a", exitNode: "gw" })).exit_node).toBeUndefined();
+    const msgs = validate(withTailnets(newTailnet({ tag: "a", asProxy: true, exitNode: "gw" }))).map((i) => i.message);
+    expect(msgs.join("\n")).not.toContain("出口节点");
+  });
+
   it("validates tags, JSON and state directories", () => {
     const p = withTailnets(
       newTailnet({ tag: "a" }),
@@ -473,7 +484,7 @@ describe("Tailscale", () => {
     expect(msgs).toContain("标签重复：hy2-1");
     expect(msgs).toContain("JSON 有误");
     expect(msgs).toContain("state_directory「tailscale」");
-    expect(msgs).toContain("没有设置 exit_node");
+    expect(msgs).toContain("没有填出口节点");
   });
 
   it("parses JSON with comments but keeps // inside strings", () => {

@@ -66,6 +66,7 @@ export function newTailnet(partial: Partial<Tailnet> = {}): Tailnet {
     dnsDomains: [],
     routes: [],
     asProxy: false,
+    exitNode: "",
     ...partial,
   };
 }

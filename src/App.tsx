@@ -958,8 +958,13 @@ function TailnetCard(props: {
         checked={t.asProxy}
         onChange={(asProxy) => set({ asProxy })}
         title="作为代理出口"
-        description="加入 proxy 选择器，可手动选用；需要在端点里设置 exit_node"
+        description="加入 proxy 选择器，可手动选用；经它的流量从下面的出口节点出去"
       />
+      {t.asProxy && (
+        <FormField label="出口节点" hint="tailnet 里开启了出口节点的设备名或 Tailscale IP，写入端点的 exit_node；留空则用端点 JSON 里的">
+          {(id) => <Input id={id} className="font-mono sm:w-1/2" value={t.exitNode} placeholder="home-gw" spellCheck={false} onChange={(e) => set({ exitNode: e.target.value.trim() })} />}
+        </FormField>
+      )}
     </ItemCard>
   );
 }
