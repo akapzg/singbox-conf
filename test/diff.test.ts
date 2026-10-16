@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changedLines } from "../src/diff";
+import { changedLines, linePaths } from "../src/diff";
 
 const lines = (n: number, prefix = "l") => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
 
@@ -48,5 +48,22 @@ describe("changedLines", () => {
     const old = lines(2000, "a").join("\n");
     const next = lines(2000, "b").join("\n");
     expect(changedLines(old, next)).toEqual([{ start: 0, end: 1999 }]);
+  });
+});
+
+describe("linePaths", () => {
+  it("names each line by its container and key or index", () => {
+    const text = JSON.stringify({ log: { level: "info" }, dns: { servers: [{ tag: "a" }, { tag: "b", x: [1, 2] }] }, empty: {} }, null, 2);
+    const paths = linePaths(text.split("\n"));
+    const at = (needle: string) => paths[text.split("\n").findIndex((l) => l.includes(needle))];
+    expect(paths[0]).toBe("");
+    expect(at('"level"')).toBe("log.level");
+    expect(at('"servers"')).toBe("dns.servers");
+    expect(at('"tag": "a"')).toBe("dns.servers[0].tag");
+    expect(at('"tag": "b"')).toBe("dns.servers[1].tag");
+    expect(at("2")).toBe("dns.servers[1].x[1]");
+    expect(at('"empty"')).toBe("empty");
+    // The line opening the second server is the server itself.
+    expect(paths[text.split("\n").findIndex((l) => l.includes('"tag": "b"')) - 1]).toBe("dns.servers[1]");
   });
 });

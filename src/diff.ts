@@ -105,3 +105,30 @@ function slide(h: Hunk, b: string[]) {
   h.start -= shift;
   h.end -= shift;
 }
+
+/**
+ * For each line of pretty-printed JSON, where it sits: the path of its container plus its own
+ * key or array index, e.g. `dns.servers[1].tag`; "" for the root line. Closing lines get their
+ * container's path.
+ */
+export function linePaths(lines: string[]): string[] {
+  const stack: { path: string; next: number }[] = []; // next: array index to assign, -1 in objects
+  const out: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    const closes = /^[\]}]/.test(line);
+    if (closes) {
+      stack.pop();
+      out.push(stack[stack.length - 1]?.path ?? "");
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    let path = top?.path ?? "";
+    if (top && top.next >= 0) path = `${path}[${top.next++}]`;
+    const key = /^"((?:[^"\\]|\\.)*)"\s*:/.exec(line)?.[1];
+    if (key !== undefined) path = path ? `${path}.${key}` : key;
+    out.push(path);
+    if (/[{[]$/.test(line)) stack.push({ path, next: line.endsWith("[") ? 0 : -1 });
+  }
+  return out;
+}

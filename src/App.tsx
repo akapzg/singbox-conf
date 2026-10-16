@@ -8,10 +8,12 @@ import { dedupeTags, importSingBoxConfig, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
 import { CodeEditor } from "./code-editor";
 import { useDragSort } from "./drag-sort";
-import { changedLines, type LineRange } from "./diff";
+import { changedLines, linePaths, type LineRange } from "./diff";
 import {
   Boxes,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleAlert,
   CircleCheck,
   Copy,
@@ -1137,6 +1139,8 @@ function ConfigPreview(props: {
   wrap: boolean;
   /** False while its sheet is closed; opening it jumps to the first range again. */
   visible?: boolean;
+  /** A line to scroll to on demand (the change list); `seq` makes repeats work. */
+  jump?: { line: number; seq: number } | null;
 }) {
   const ref = useRef<HTMLPreElement>(null);
   /** The key last scrolled for; undefined while hidden, so reopening jumps again (without animation). */
@@ -1162,6 +1166,15 @@ function ConfigPreview(props: {
     });
     return () => cancelAnimationFrame(frame);
   }, [props.scrollKey, props.visible, first === undefined]);
+  useEffect(() => {
+    const pre = ref.current;
+    const jump = props.jump;
+    if (!pre || !jump || props.visible === false) return;
+    const row = pre.querySelector(`[data-line="${Math.min(jump.line, props.lines.length - 1)}"]`) as HTMLElement | null;
+    if (!row) return;
+    const offset = row.getBoundingClientRect().top - pre.getBoundingClientRect().top;
+    pre.scrollTo({ top: Math.max(0, offset + pre.scrollTop - 48), behavior: "smooth" });
+  }, [props.jump?.seq]);
   const shaded = (i: number) => props.ranges.some((r) => !r.deleted && i >= r.start && i <= r.end);
   /** A deletion shows as a red line where the lines were, before row `i`. */
   const deletedBefore = (i: number) => props.ranges.some((r) => r.deleted && r.start === i);
@@ -1285,7 +1298,8 @@ export default function App() {
 
   const issues = useMemo(() => validate(profile), [profile]);
   const configText = useMemo(() => JSON.stringify(generateConfig(profile), null, 2), [profile]);
-  const previewLines = useMemo(() => configText.split("\n").map(highlightJson), [configText]);
+  const configLines = useMemo(() => configText.split("\n"), [configText]);
+  const previewLines = useMemo(() => configLines.map(highlightJson), [configLines]);
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
   const issuesFor = (id: string) => issues.filter((i) => i.id === id);
@@ -1468,9 +1482,60 @@ export default function App() {
     if (prev.profileId !== active.id) setEdit(null);
     else if (prev.text !== configText) setEdit((e) => ({ ranges: changedLines(prev.text, configText), seq: (e?.seq ?? 0) + 1 }));
   }, [configText, active.id]);
-  const previewProps = edit
-    ? { ranges: edit.ranges, scrollKey: `edit-${edit.seq}`, reveal: true }
-    : { ranges: focusLines ? [focusLines] : [], scrollKey: focusId, reveal: false };
+  const [jump, setJump] = useState<{ line: number; seq: number; at: number; edit: number } | null>(null);
+  const previewProps = {
+    ...(edit
+      ? { ranges: edit.ranges, scrollKey: `edit-${edit.seq}`, reveal: true }
+      : { ranges: focusLines ? [focusLines] : [], scrollKey: focusId, reveal: false }),
+    jump,
+  };
+  // The changes of the last edit, each named by where it sits, so scattered ones can be visited.
+  const paths = useMemo(() => linePaths(configLines), [configLines]);
+  const changes = useMemo(
+    () =>
+      (edit?.ranges ?? []).map((r) => {
+        const body = (l: string) => l.trim().replace(/,$/, "");
+        const text = r.deleted ? "" : (configLines.slice(r.start, r.end + 1).map(body).find((l) => !/^[{}[\]]$/.test(l)) ?? body(configLines[r.start]));
+        return { line: r.start, path: paths[Math.min(r.start, paths.length - 1)] || "根", deleted: !!r.deleted, text };
+      }),
+    [edit, configLines, paths],
+  );
+  const goToChange = (i: number) => {
+    const c = changes[(i + changes.length) % changes.length];
+    setJump({ line: c.line, seq: (jump?.seq ?? 0) + 1, at: (i + changes.length) % changes.length, edit: edit?.seq ?? 0 });
+  };
+  const changeAt = jump && jump.edit === edit?.seq ? jump.at : -1;
+  const changeNav = changes.length > 0 && (
+    <span className="flex items-center">
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-6 gap-0.5 px-1.5 font-normal text-muted-foreground" />}>
+          {changes.length} 处改动
+          <ChevronDown />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="max-h-80 w-80 overflow-y-auto">
+          {changes.map((c, i) => (
+            <DropdownMenuItem key={i} className="flex-col items-start gap-0" onClick={() => goToChange(i)}>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {c.path}
+                {c.deleted && " · 删除"}
+              </span>
+              {c.text && <span className="w-full truncate font-mono">{c.text}</span>}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {changes.length > 1 && (
+        <>
+          <IconAction label="上一处改动" onClick={() => goToChange((changeAt < 0 ? 0 : changeAt) - 1)}>
+            <ChevronUp />
+          </IconAction>
+          <IconAction label="下一处改动" onClick={() => goToChange(changeAt + 1)}>
+            <ChevronDown />
+          </IconAction>
+        </>
+      )}
+    </span>
+  );
   const wrapToggle = (
     <IconAction label={wrap ? "不自动换行" : "自动换行"} onClick={() => setWrap(!wrap)}>
       <WrapText className={wrap ? "text-foreground" : undefined} />
@@ -1783,6 +1848,7 @@ export default function App() {
             <span className="font-mono text-xs font-medium">config.json</span>
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               {configStats}
+              {changeNav}
               {wrapToggle}
             </span>
           </div>
@@ -1857,7 +1923,10 @@ export default function App() {
                 <Download />
                 下载
               </Button>
-              <span className="ml-auto">{wrapToggle}</span>
+              <span className="ml-auto flex items-center">
+                {changeNav}
+                {wrapToggle}
+              </span>
             </div>
           </SheetHeader>
           <ConfigPreview lines={previewLines} {...previewProps} wrap={wrap} visible={preview} />
