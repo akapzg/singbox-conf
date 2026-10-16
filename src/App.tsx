@@ -1700,7 +1700,7 @@ export default function App() {
           scrolls on its own (so its scrollbar sits next to it, not beyond the preview) and the
           generated config fills the right column. */}
       <main className="mx-auto grid w-full max-w-3xl items-start gap-6 px-4 pt-1 lg:min-h-0 lg:flex-1 lg:max-w-[1400px] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-stretch">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4 lg:min-h-0 lg:overflow-hidden">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-4 lg:min-h-0">
           <div className="-mx-4 overflow-x-auto border-b px-4 [scrollbar-width:none] lg:mx-0 lg:px-0">
             <TabsList variant="line" className="h-10" aria-label="设置分类">
               {TABS.map((t) => {
