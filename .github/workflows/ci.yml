@@ -52,10 +52,9 @@ jobs:
         run: echo "SING_BOX=$(python scripts/fetch-sing-box.py "$SING_BOX_VERSION" "$RUNNER_TEMP/sing-box")" >> "$GITHUB_ENV"
       - run: npm run check:singbox
 
-  # Cloudflare Workers Builds (connected to this repo in the Cloudflare dashboard) deploys every
-  # branch push as a Preview and the `release` branch to production. A version tag, once tests
-  # and sing-box checks pass, moves `release` to the tagged commit and creates the GitHub release.
-  # Only GitHub's own token is used; no Cloudflare credentials live here.
+  # Deploys are Cloudflare's: Workers Builds (connected to this repo in the Cloudflare dashboard)
+  # deploys main to production and every other branch as a Preview. A version tag, once tests and
+  # sing-box checks pass, creates the GitHub release with a dist/ archive for self-hosting.
   release:
     name: Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -68,8 +67,6 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -83,8 +80,6 @@ jobs:
           fi
       - run: npm ci
       - run: npm run build
-      - name: Point the release branch at this tag (Cloudflare deploys it to production)
-        run: git push --force origin "$GITHUB_SHA:refs/heads/release"
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

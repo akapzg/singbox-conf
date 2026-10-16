@@ -40,22 +40,25 @@ SING_BOX=$(python3 scripts/fetch-sing-box.py 1.14.3 /tmp/sing-box) npm run check
 
 站点是一个只含静态资源的 Cloudflare Worker（`wrangler.jsonc`，资源目录 `dist/`），由 Cloudflare 的 Git 集成（Workers Builds）构建和部署，GitHub 里不需要任何 Cloudflare 凭据：
 
-- **推送任意分支**（包括 `main`）：Cloudflare 构建后部署为该分支的 Preview，地址在 Worker 的 Previews 页面里。Preview 地址默认公开（带 `noindex`），需要时可用 Cloudflare Access 保护。
-- **推送版本 tag**（`v1.2.3`，需与 `package.json` 的 `version` 一致）：GitHub Actions 跑完测试和三平台 `sing-box check` 后，把 `release` 分支指到这个提交，Cloudflare 随即部署到正式地址；同时创建 GitHub Release，附上 `dist/` 的压缩包供自部署。
+- **`main`**：每次推送（通常是合并 PR）都部署到正式地址。
+- **其他分支**：部署为该分支的 Preview，地址在 Worker 的 Previews 页面里，连接了 GitHub 的话也会出现在 PR 上。Preview 地址默认公开（带 `noindex`），需要时可用 Cloudflare Access 保护。
+- **版本 tag**（`v1.2.3`，需与 `package.json` 的 `version` 一致）：GitHub Actions 跑完测试和三平台 `sing-box check` 后创建 GitHub Release，附上 `dist/` 的压缩包供自部署。tag 不影响部署。
+
+日常改动在分支上做，看过 Preview 再合并到 `main`。
 
 在 Cloudflare 里设置一次（Workers & Pages → Create → Import a repository，选这个仓库）：
 
 | 设置 | 值 |
 | --- | --- |
-| Git branch（正式分支） | `release` |
+| Git branch（正式分支） | `main` |
 | Build command | `npm run build` |
 | Deploy command | `npx wrangler deploy`（默认） |
 | Preview command | `npx wrangler preview`（默认） |
 | Root directory | `/` |
 
-依赖会自动安装，Node 版本取自 `.node-version`。`release` 分支只由发布流程写入，不要直接往上提交。
+依赖会自动安装，Node 版本取自 `.node-version`。
 
-发布新版本：
+在 `main` 上发布一个版本号（GitHub Release）：
 
 ```bash
 npm version 0.2.0 -m "Release %s"

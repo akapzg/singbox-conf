@@ -125,7 +125,7 @@
 ## 部署
 
 - Cloudflare Workers，只含静态资源（`wrangler.jsonc`），由 Cloudflare 的 Git 集成（Workers Builds）构建部署，GitHub 里不放 Cloudflare 凭据。选 Wrangler 而不是新的 `cf` CLI：`cf` 要求 Vite 6+ 和当时刚发布一天的 `@cloudflare/vite-plugin` beta，不符合“依赖至少发布两周”的约定。
-- Workers Builds 只按分支触发，不认 tag。所以正式分支设为 `release`：其他分支（包括 `main`）都是 Preview；推送版本 tag 后，CI 在测试和三平台 `sing-box check` 通过后把 `release` 强制指到该提交（用 GitHub 自带的令牌），再创建 GitHub Release（附 `dist/` 压缩包）。
+- 按 Cloudflare 默认的方式工作：`main` 是正式分支，推送即上线；其他分支是 Preview，在分支上改、看过 Preview 再合并。版本 tag 只用来发 GitHub Release（测试和三平台 `sing-box check` 通过后，附 `dist/` 压缩包），不影响部署。曾考虑“打 tag 才上线”：Workers Builds 只按分支触发，要么另设 `release` 分支由 CI 推进，要么在 GitHub 里放 Cloudflare 令牌，都比默认方式多一层。
 - `compatibility_date` 不能晚于所固定 Wrangler 自带运行时支持的日期；纯静态资源不受它影响。
 - `public/_headers` 补上只能用响应头表达的安全设置（`frame-ancestors` 等）。
 

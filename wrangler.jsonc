@@ -1,6 +1,6 @@
 // Cloudflare Workers deployment: an assets-only Worker serving the Vite build in dist/.
-// Cloudflare Workers Builds runs `npm run build` and deploys: branch pushes become Previews, the
-// `release` branch production (moved there by .github/workflows/ci.yml on version tags).
+// Cloudflare Workers Builds runs `npm run build` and deploys: main to production, every other
+// branch as a Preview.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "singbox-confgen",
