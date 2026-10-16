@@ -24,6 +24,15 @@ const HEADER = 64;
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/** The nearest ancestor that scrolls vertically, if any. */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const { overflowY } = getComputedStyle(p);
+    if ((overflowY === "auto" || overflowY === "scroll") && p.scrollHeight > p.clientHeight) return p;
+  }
+  return null;
+}
+
 /** Where the element sits in the layout, ignoring any transform it is animating with. */
 function layoutTop(el: HTMLElement): number {
   const shift = new DOMMatrixReadOnly(getComputedStyle(el).transform).m42;
@@ -97,6 +106,8 @@ export function useDragSort(ids: string[], onReorder: (ids: string[]) => void) {
     const row = rows.current.get(id);
     if (!row) return;
     drag.current = { id, grab: pointerY - layoutTop(row), pointerY };
+    // A list with its own scrollbar (e.g. group members) scrolls at its edges, the page at the window's.
+    const scroller = scrollParent(row);
 
     /** Put the dragged row before the first other row whose middle is below the pointer. */
     const reposition = () => {
@@ -121,11 +132,24 @@ export function useDragSort(ids: string[], onReorder: (ids: string[]) => void) {
     // Scroll while the pointer rests near an edge; the rows move under it, so reposition too.
     let frame = requestAnimationFrame(function tick() {
       const y = drag.current!.pointerY;
-      const speed = y < HEADER + EDGE ? -(HEADER + EDGE - y) : y > innerHeight - EDGE ? EDGE - (innerHeight - y) : 0;
-      if (speed) {
-        window.scrollBy(0, Math.round(speed / 4));
-        reposition();
+      let moved = false;
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        const inner = y < r.top + EDGE / 2 ? -(r.top + EDGE / 2 - y) : y > r.bottom - EDGE / 2 ? EDGE / 2 - (r.bottom - y) : 0;
+        if (inner) {
+          const before = scroller.scrollTop;
+          scroller.scrollBy(0, Math.round(inner / 3));
+          moved = scroller.scrollTop !== before;
+        }
       }
+      if (!moved) {
+        const speed = y < HEADER + EDGE ? -(HEADER + EDGE - y) : y > innerHeight - EDGE ? EDGE - (innerHeight - y) : 0;
+        if (speed) {
+          window.scrollBy(0, Math.round(speed / 4));
+          moved = true;
+        }
+      }
+      if (moved) reposition();
       frame = requestAnimationFrame(tick);
     });
 
