@@ -753,42 +753,6 @@ function ImportSummary(props: { rows: { label: string; tags: string[] }[]; notes
   );
 }
 
-/** First steps, shown while the nodes are still the template's examples. */
-function GettingStarted(props: { onImport: () => void }) {
-  const steps: [ReactNode, ReactNode][] = [
-    [
-      "填入你的节点",
-"已有 sing-box 配置（比如 SFM、SFA 里正在用的）可以直接导入，只取其中的节点、Tailscale 和代理组。也可以展开下面的示例，把服务器、密码换成你的，或选协议模板新加。",
-    ],
-    ["按需调整", "节点多可以在「代理组」里分组；「分流」里加自己的直连、代理名单；「设置」里选目标平台。"],
-    ["导入客户端", "右上角下载 config.json，在 sing-box 客户端里新建配置并选这个文件。"],
-  ];
-  return (
-    <section className="rounded-lg bg-primary/[0.03] p-4 ring-1 ring-primary/15">
-      <h2 className="text-sm font-medium">开始使用</h2>
-      <ol className="mt-3 flex flex-col gap-3">
-        {steps.map(([title, body], i) => (
-          <li key={i} className="flex gap-3">
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-medium text-primary-foreground">
-              {i + 1}
-            </span>
-            <span className="flex flex-col gap-0.5">
-              <span className="text-xs font-medium">{title}</span>
-              <span className="text-xs/relaxed text-muted-foreground">{body}</span>
-            </span>
-          </li>
-        ))}
-      </ol>
-      <div className="mt-4 flex flex-wrap gap-1.5 pl-8">
-        <Button onClick={props.onImport}>
-          <FileUp />
-          导入 sing-box 配置
-        </Button>
-      </div>
-    </section>
-  );
-}
-
 /** Divides a long card into parts. */
 function SubHeading(props: { children: ReactNode }) {
   return <h3 className="-mb-1 border-t pt-4 text-xs font-medium text-muted-foreground">{props.children}</h3>;
@@ -1730,18 +1694,12 @@ export default function App() {
 
             {tab === "nodes" && (
               <>
-                {examplesLeft && <GettingStarted onImport={() => fileInput.current?.click()} />}
-                {/* The getting-started guide says the same while it shows. */}
-                {!examplesLeft && (
-                  <Intro>每个节点是一段 sing-box 出站配置，可以按协议模板新加，也可以从现有的 sing-box 配置导入。拖动左侧手柄调整顺序，客户端里按此顺序显示。</Intro>
-                )}
+                <Intro>每个节点是一段 sing-box 出站配置，可以按协议模板新加，也可以从现有的 sing-box 配置导入。拖动左侧手柄调整顺序，客户端里按此顺序显示。</Intro>
                 <ListHead title="节点" count={profile.nodes.length}>
-                  {!examplesLeft && (
-                    <Button variant="ghost" onClick={() => fileInput.current?.click()}>
-                      <FileUp />
-                      导入
-                    </Button>
-                  )}
+                  <Button variant="ghost" onClick={() => fileInput.current?.click()}>
+                    <FileUp />
+                    导入
+                  </Button>
                   <AddNode usedTags={profile.nodes.map((n) => n.tag)} onAdd={addNode} />
                 </ListHead>
                 {profile.nodes.length === 0 && <Empty>还没有节点：选择协议模板，点击「添加节点」。</Empty>}
