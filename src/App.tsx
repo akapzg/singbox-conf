@@ -944,7 +944,7 @@ function TailnetCard(props: {
         )}
       </FormField>
       <SubHeading>路由</SubHeading>
-      <FormField hintAbove label="额外路由" hint="走这个 tailnet 的域名或 IP 段；tailnet 设备和已批准的子网路由会自动识别，不用填">
+      <FormField hintAbove label="额外路由" hint="走这个 tailnet 的域名或 IP 段；tailnet 设备和已批准的子网路由会自动识别，不用填。指向 tailnet 之外的地址时，需要作为代理出口并填出口节点">
         {(id) => (
           <ListEditor
             id={id}
@@ -956,15 +956,17 @@ function TailnetCard(props: {
           />
         )}
       </FormField>
-      <FormField label="出口节点" hint="tailnet 里开启了出口节点的设备名或 Tailscale IP（端点的 exit_node）。访问 tailnet 设备和已通告的子网不需要它；额外路由指向 tailnet 之外的地址，或作为代理出口时，流量要靠它出去">
-        {(id) => <Input id={id} className="font-mono sm:w-1/2" value={t.exitNode} placeholder="home-gw" spellCheck={false} onChange={(e) => set({ exitNode: e.target.value.trim() })} />}
-      </FormField>
       <ToggleRow
         checked={t.asProxy}
         onChange={(asProxy) => set({ asProxy })}
         title="作为代理出口"
-        description="加入 proxy 选择器，可手动选用；经它的流量从上面的出口节点出去"
+        description="加入 proxy 选择器，可手动选用；经它的流量从出口节点出去"
       />
+      {(t.asProxy || t.exitNode) && (
+        <FormField label="出口节点" hint="tailnet 里开启了出口节点的设备名或 Tailscale IP，写入端点的 exit_node">
+          {(id) => <Input id={id} className="font-mono sm:w-1/2" value={t.exitNode} placeholder="home-gw" spellCheck={false} onChange={(e) => set({ exitNode: e.target.value.trim() })} />}
+        </FormField>
+      )}
     </ItemCard>
   );
 }
