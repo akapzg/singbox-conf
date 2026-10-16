@@ -956,7 +956,7 @@ function TailnetCard(props: {
           />
         )}
       </FormField>
-      <FormField label="出口节点" hint="tailnet 里开启了出口节点的设备名或 Tailscale IP（端点的 exit_node）。访问 tailnet 设备和子网不需要它；作为代理出口时必填">
+      <FormField label="出口节点" hint="tailnet 里开启了出口节点的设备名或 Tailscale IP（端点的 exit_node）。访问 tailnet 设备和已通告的子网不需要它；额外路由指向 tailnet 之外的地址，或作为代理出口时，流量要靠它出去">
         {(id) => <Input id={id} className="font-mono sm:w-1/2" value={t.exitNode} placeholder="home-gw" spellCheck={false} onChange={(e) => set({ exitNode: e.target.value.trim() })} />}
       </FormField>
       <ToggleRow
