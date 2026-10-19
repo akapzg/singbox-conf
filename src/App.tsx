@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
-import type { Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, RouteRule, Settings, Tailnet } from "./types";
+import type { DnsRule, DnsRuleServer, Platform, Profile, ProxyGroup, ProxyNode, RemoteDnsChoice, RemoteDnsProtocol, RouteRule, Settings, Tailnet } from "./types";
 import { TEMPLATES } from "./templates";
-import { REMOTE_DNS, generateConfig, nodeObject, proxyChoices, parseDomainList, parseRuleList, tailnetEndpoint, validate, type DomainMatch, type Issue } from "./generate";
-import { defaultSettings, freshTag, newGroup, newNode, newRule, newTailnet, randomSecret } from "./defaults";
+import { REMOTE_DNS, customDnsServer, dnsRuleTag, generateConfig, nodeObject, proxyChoices, parseDomainList, parseRuleList, tailnetEndpoint, validate, type DomainMatch, type Issue } from "./generate";
+import { defaultSettings, freshTag, newDnsRule, newGroup, newNode, newRule, newTailnet, randomSecret } from "./defaults";
 import { clearStore, defaultStore, loadStore, newSavedProfile, saveStore, type Store } from "./storage";
 import { fitImport, type ImportResult } from "./importer";
 import { useDialogs } from "./dialog";
@@ -482,6 +482,7 @@ const MATCH_NAMES: [keyof DomainMatch, string][] = [
 const SYNTAX: { example: string; name: string; desc: string; ip?: boolean }[] = [
   { example: "example.com", name: "域名后缀", desc: "匹配 example.com 和它的所有子域名" },
   { example: ".example.com", name: "域名后缀", desc: "只匹配子域名，不含 example.com 本身" },
+  { example: ".", name: "设备名", desc: "不带点的名字，如 nas（写成正则 ^[^.]+$）" },
   { example: "domain:example.com", name: "完整域名", desc: "只匹配 example.com 本身" },
   { example: "domain_keyword:google", name: "关键字", desc: "域名里含有 google 就匹配" },
   { example: "domain_regex:^cdn\\d+\\.", name: "正则", desc: "用正则匹配域名（Go RE2 语法，域名已转成小写）" },
@@ -1062,6 +1063,75 @@ function RuleCard(props: {
       </FormField>
       <FormField label="域名和 IP">
         {(id) => <ListEditor id={id} lines={r.lines} onChange={(lines) => set({ lines })} placeholder={"openai.com\nanthropic.com"} allowIp />}
+      </FormField>
+    </ItemCard>
+  );
+}
+
+function DnsRuleCard(props: {
+  rule: DnsRule;
+  index: number;
+  /** The proxy DNS as it reads in prose, e.g. "Google DoT". */
+  remoteName: string;
+  issues: Issue[];
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: (r: DnsRule) => void;
+  onRemove: () => void;
+  sort: ReturnType<typeof useDragSort>;
+}) {
+  const { rule: r } = props;
+  const set = (patch: Partial<DnsRule>) => props.onChange({ ...r, ...patch });
+  const entries = r.lines.map((l) => l.replace(/(^|\s)#.*/, "").trim()).filter(Boolean);
+  const name = `DNS 规则 ${props.index + 1}`;
+  const { server } = r.server === "custom" ? customDnsServer(r.custom, dnsRuleTag(props.index), null) : {};
+  const serverName =
+    r.server === "local" ? "本地 DNS" : r.server === "remote" ? "代理 DNS" : server ? `${server.type}://${String(server.server)}` : "自定义（有错误）";
+  const options: { value: DnsRuleServer; label: string }[] = [
+    { value: "local", label: "本地 DNS（当前网络下发的）" },
+    { value: "remote", label: `代理 DNS（${props.remoteName}，经 proxy）` },
+    { value: "custom", label: "自定义…" },
+  ];
+  return (
+    <ItemCard
+      id={r.id}
+      expanded={props.expanded}
+      onToggle={props.onToggle}
+      issues={props.issues}
+      handle={<DragHandle label={name} {...props.sort.handleProps(r.id)} />}
+      rowRef={props.sort.rowRef(r.id)}
+      dragging={props.sort.dragging === r.id}
+      title={
+        <>
+          {name} → <span className="font-mono">{serverName}</span>
+        </>
+      }
+      meta={
+        <span className="font-mono">
+          {entries.length ? `${entries.slice(0, 3).join("、")}${entries.length > 3 ? ` 等 ${entries.length} 项` : ""}` : "还没有域名"}
+        </span>
+      }
+      actions={
+        <IconAction label={`删除${name}`} danger onClick={props.onRemove}>
+          <Trash2 />
+        </IconAction>
+      }
+    >
+      <IssueList issues={props.issues} />
+      <FormField label="DNS 服务器" hint="匹配的域名用它解析">
+        {(id) => <SimpleSelect id={id} value={r.server} options={options} onChange={(server) => set({ server })} className="sm:w-1/2" />}
+      </FormField>
+      {r.server === "custom" && (
+        <FormField
+          hintAbove
+          label="自定义 DNS 服务器"
+          hint={`sing-box DNS 服务器 JSON，可写注释；tag 由生成器填写（${dnsRuleTag(props.index)}），不写 detour 时直连访问`}
+        >
+          {(id) => <CodeEditor labelledBy={`${id}-label`} value={r.custom} onChange={(custom) => set({ custom })} minLines={4} maxLines={14} />}
+        </FormField>
+      )}
+      <FormField label="域名">
+        {(id) => <ListEditor id={id} lines={r.lines} onChange={(lines) => set({ lines })} placeholder={".  # 不带点的设备名，如 nas\nlan\nhome.arpa"} />}
       </FormField>
     </ItemCard>
   );
@@ -1826,6 +1896,21 @@ export default function App() {
     const r = profile.settings.rules[i];
     removeWithUndo(`规则 ${i + 1}`, (p) => ({ ...p, settings: { ...p.settings, rules: p.settings.rules.filter((x) => x.id !== r.id) } }));
   };
+  // First matching DNS rule wins, so the order matters.
+  const dnsRuleSort = useDragSort(
+    profile.settings.dnsRules.map((r) => r.id),
+    (ids) => setProfile((p) => ({ ...p, settings: { ...p.settings, dnsRules: ids.map((id) => p.settings.dnsRules.find((r) => r.id === id)!) } })),
+  );
+  const addDnsRule = () => {
+    const r = newDnsRule();
+    setSettings({ dnsRules: [...profile.settings.dnsRules, r] });
+    setExpanded((prev) => new Set(prev).add(r.id));
+    setScrollTo(r.id);
+  };
+  const removeDnsRule = (i: number) => {
+    const r = profile.settings.dnsRules[i];
+    removeWithUndo(`DNS 规则 ${i + 1}`, (p) => ({ ...p, settings: { ...p.settings, dnsRules: p.settings.dnsRules.filter((x) => x.id !== r.id) } }));
+  };
   const addTailnet = () => {
     const tailnets = profile.settings.tailnets;
     const t = newTailnet({ tag: tailnets.length ? `ts${tailnets.length + 1}` : "ts" });
@@ -2286,6 +2371,33 @@ export default function App() {
                     </>
                   }
                 />
+                <ListHead title="DNS 分流" count={profile.settings.dnsRules.length}>
+                  <Button onClick={addDnsRule}>
+                    <Plus />
+                    添加 DNS 规则
+                  </Button>
+                </ListHead>
+                <Intro>
+                  让匹配的域名用指定的 DNS 服务器解析，例如局域网域名（nas、nas.lan）交给路由器 192.168.1.1，其余照旧。只改由谁解析，流量仍按上面的分流走；走代理的域名照样只给 IPv4。在所有模式下生效，排在 tailnet 分域 DNS 之后、其他 DNS 规则（包括局域网域名默认用本地 DNS）之前；多条规则从上到下第一条匹配的生效。
+                </Intro>
+                {profile.settings.dnsRules.length === 0 && <Empty>还没有 DNS 规则。</Empty>}
+                {profile.settings.dnsRules.map((r, i) => (
+                  <DnsRuleCard
+                    key={r.id}
+                    rule={r}
+                    index={i}
+                    remoteName={remoteDnsName(profile.settings)}
+                    issues={issuesFor(r.id)}
+                    expanded={expanded.has(r.id)}
+                    onToggle={() => toggle(r.id)}
+                    onChange={(next) => {
+                      setFocusId(r.id);
+                      setProfile((p) => ({ ...p, settings: { ...p.settings, dnsRules: p.settings.dnsRules.map((x) => (x.id === r.id ? next : x)) } }));
+                    }}
+                    onRemove={() => removeDnsRule(i)}
+                    sort={dnsRuleSort}
+                  />
+                ))}
               </>
             )}
 
